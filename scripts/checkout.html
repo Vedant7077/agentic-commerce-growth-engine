@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Razorpay TEST Checkout</title>
+
+  <!--
+    checkout.html
+    =============
+    A minimal, zero-server HTML page that opens Razorpay's hosted checkout
+    for a given order_id.  Use this for quick manual testing after running
+    create_and_pay.py.
+
+    How to use:
+      1. Run `python scripts/create_and_pay.py` to get an order_id.
+      2. Open this file directly in a browser (file:// protocol works).
+      3. Enter your Razorpay TEST Key ID and the order_id.
+      4. Click "Pay ₹499" — the Razorpay modal opens.
+      5. Use the TEST card:
+           Card:   4111 1111 1111 1111
+           Expiry: any future date
+           CVV:    any 3 digits
+      6. On success, the page shows the payment_id and signature.
+         Pass them to verify_payment.py.
+
+    GOTCHA — this page runs entirely client-side:
+      • The key_secret is NEVER exposed here (only key_id is needed).
+      • Signature verification MUST happen server-side (verify_payment.py).
+      • Never embed key_secret in HTML/JS — it's a secret.
+
+    GOTCHA — amount in checkout options:
+      • The `amount` in the checkout options is for DISPLAY ONLY.
+      • The actual charged amount comes from the order created server-side.
+      • If they don't match, Razorpay shows the server-side amount.
+  -->
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: #0f0f23;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+
+    .card {
+      background: #1a1a3e;
+      border: 1px solid #2d2d5e;
+      border-radius: 12px;
+      padding: 2rem;
+      max-width: 520px;
+      width: 100%;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+    }
+
+    h1 {
+      font-size: 1.4rem;
+      margin-bottom: 0.25rem;
+      color: #818cf8;
+    }
+
+    .subtitle {
+      font-size: 0.85rem;
+      color: #94a3b8;
+      margin-bottom: 1.5rem;
+    }
+
+    label {
+      display: block;
+      font-size: 0.8rem;
+      color: #94a3b8;
+      margin-bottom: 0.25rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    input {
+      width: 100%;
+      padding: 0.6rem 0.8rem;
+      margin-bottom: 1rem;
+      border: 1px solid #2d2d5e;
+      border-radius: 6px;
+      background: #0f0f23;
+      color: #e2e8f0;
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-size: 0.9rem;
+    }
+
+    input:focus {
+      outline: none;
+      border-color: #818cf8;
+      box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.25);
+    }
+
+    button {
+      width: 100%;
+      padding: 0.75rem;
+      border: none;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #6366f1, #818cf8);
+      color: white;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+
+    button:hover { opacity: 0.9; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .result {
+      margin-top: 1.5rem;
+      padding: 1rem;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      font-family: 'JetBrains Mono', monospace;
+      word-break: break-all;
+      display: none;          /* shown via JS */
+    }
+
+    .result.success {
+      background: rgba(34, 197, 94, 0.1);
+      border: 1px solid #22c55e;
+      color: #86efac;
+    }
+
+    .result.error {
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid #ef4444;
+      color: #fca5a5;
+    }
+
+    .result dt {
+      color: #94a3b8;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      margin-top: 0.5rem;
+    }
+
+    .result dt:first-child { margin-top: 0; }
+    .result dd { margin-bottom: 0.25rem; }
+
+    .test-cards {
+      margin-top: 1rem;
+      padding: 0.75rem;
+      background: rgba(129, 140, 248, 0.08);
+      border-radius: 6px;
+      font-size: 0.78rem;
+      color: #94a3b8;
+      line-height: 1.6;
+    }
+
+    .test-cards strong { color: #c7d2fe; }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <h1>🧪 Razorpay TEST Checkout</h1>
+  <p class="subtitle">Enter your test key &amp; order ID from create_and_pay.py</p>
+
+  <label for="keyId">Razorpay Key ID</label>
+  <input
+    type="text"
+    id="keyId"
+    placeholder="rzp_test_…"
+    value=""
+  />
+
+  <label for="orderId">Order ID</label>
+  <input
+    type="text"
+    id="orderId"
+    placeholder="order_…"
+    value=""
+  />
+
+  <button id="payBtn" onclick="openCheckout()">Pay ₹499</button>
+
+  <div class="result" id="result"></div>
+
+  <div class="test-cards">
+    <strong>Test Card Details:</strong><br />
+    Use RuPay (Domestic): <strong>6527 6589 0000 1005</strong><br />
+    Or Mastercard: <strong>5267 3181 8797 5449</strong><br />
+    Expiry: any future date &nbsp;|&nbsp; CVV: any 3 digits
+  </div>
+</div>
+
+<!--
+  Load Razorpay's checkout.js from their CDN.
+  This script exposes the global `Razorpay` constructor.
+  GOTCHA: Always load from https://checkout.razorpay.com — never self-host.
+-->
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+
+<script>
+  /**
+   * Opens the Razorpay checkout modal.
+   *
+   * Flow:
+   *   1. We create a `new Razorpay(options)` instance.
+   *   2. Calling `.open()` renders the hosted payment modal.
+   *   3. On success, the `handler` callback receives:
+   *        - razorpay_payment_id
+   *        - razorpay_order_id
+   *        - razorpay_signature
+   *   4. Those three values must be sent to your server for
+   *      signature verification (verify_payment.py).
+   *
+   * GOTCHA — `amount` in options:
+   *   The amount here is cosmetic (for the modal UI).  The actual
+   *   charge comes from the Order created server-side.  If they
+   *   differ, Razorpay uses the server-side order amount.
+   *
+   * GOTCHA — `key` vs `key_id` vs `key_secret`:
+   *   Only `key` (which is your key_id) is used client-side.
+   *   NEVER put key_secret in client code.
+   */
+  function openCheckout() {
+    const keyId   = document.getElementById("keyId").value.trim();
+    const orderId = document.getElementById("orderId").value.trim();
+
+    if (!keyId || !orderId) {
+      alert("Please enter both the Key ID and Order ID.");
+      return;
+    }
+
+    const options = {
+      key: keyId,                     // your rzp_test_… key (NOT the secret)
+      amount: 49900,                  // ₹499 in paise — display only
+      currency: "INR",
+      name: "Agentic Commerce",
+      description: "Test Transaction — Hackathon Demo",
+      order_id: orderId,              // the order_id from create_and_pay.py
+
+      // ── Success handler ────────────────────────────────────────────
+      handler: function (response) {
+        /*
+         * `response` contains:
+         *   razorpay_payment_id  — unique payment identifier
+         *   razorpay_order_id    — echoes back the order_id
+         *   razorpay_signature   — HMAC-SHA256(order_id|payment_id, key_secret)
+         *
+         * Display these so the user can copy them into verify_payment.py.
+         */
+        const el = document.getElementById("result");
+        el.className = "result success";
+        el.style.display = "block";
+        el.innerHTML = `
+          <dt>Status</dt>
+          <dd>✓ Payment successful</dd>
+          <dt>Payment ID</dt>
+          <dd>${response.razorpay_payment_id}</dd>
+          <dt>Order ID</dt>
+          <dd>${response.razorpay_order_id}</dd>
+          <dt>Signature</dt>
+          <dd>${response.razorpay_signature}</dd>
+          <dt>Verify with</dt>
+          <dd style="font-size:0.75rem; color:#94a3b8; margin-top:0.25rem;">
+            python scripts/verify_payment.py \\<br/>
+            &nbsp;&nbsp;--order_id ${response.razorpay_order_id} \\<br/>
+            &nbsp;&nbsp;--payment_id ${response.razorpay_payment_id} \\<br/>
+            &nbsp;&nbsp;--signature ${response.razorpay_signature}
+          </dd>
+        `;
+      },
+
+      // ── Modal dismissed (user closed without paying) ───────────────
+      modal: {
+        ondismiss: function () {
+          const el = document.getElementById("result");
+          el.className = "result error";
+          el.style.display = "block";
+          el.innerHTML = "<dt>Status</dt><dd>✗ Checkout cancelled by user</dd>";
+        },
+      },
+
+      // Prefill buyer details (optional, helps skip the email/phone step)
+      prefill: {
+        name:    "Test User",
+        email:   "test@example.com",
+        contact: "9999999999",
+      },
+
+      theme: {
+        color: "#6366f1",
+      },
+    };
+
+    const rzp = new Razorpay(options);
+
+    // ── Error handler (network issues, invalid order, etc.) ──────────
+    rzp.on("payment.failed", function (response) {
+      const el = document.getElementById("result");
+      el.className = "result error";
+      el.style.display = "block";
+      el.innerHTML = `
+        <dt>Status</dt>
+        <dd>✗ Payment failed</dd>
+        <dt>Error Code</dt>
+        <dd>${response.error.code}</dd>
+        <dt>Description</dt>
+        <dd>${response.error.description}</dd>
+        <dt>Reason</dt>
+        <dd>${response.error.reason}</dd>
+      `;
+    });
+
+    rzp.open();
+  }
+</script>
+
+</body>
+</html>

@@ -6,9 +6,8 @@ Defines a ReAct-style agent loop:
 """
 
 import os
-from typing import Annotated
+from typing import Annotated, TypedDict
 
-from typing_extensions import TypedDict
 
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages

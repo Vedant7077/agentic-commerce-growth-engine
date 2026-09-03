@@ -27,6 +27,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 
 from audit.models import AuditEvent
 from audit.services import record_audit_event
+from policy.engine import check_policy, Decision
 from .scoring import score_product_detailed
 from .tools import search_catalogue, add_to_cart, create_order
 
@@ -380,6 +381,39 @@ def process_confirmation(state: State) -> dict:
             "order_result": {"status": "error", "detail": "Missing user_id or product_id"},
             "messages": [AIMessage(content="Cannot create order: missing user or product information.")],
         }
+
+    # --- Policy gate (before any cart / Razorpay call) ---
+    proposed_order = {
+        "total_paise": confirmation.get("price_paise", 0),
+        "items": [
+            {
+                "category": confirmation.get("category", ""),
+                "price_paise": confirmation.get("price_paise", 0),
+            }
+        ],
+    }
+    policy_result = check_policy(user_id, proposed_order)
+
+    record_audit_event(
+        event_type="policy_checked",
+        actor="system",
+        payload={
+            "request_id": state["request_id"],
+            "decision": policy_result.decision.value,
+            "reason": policy_result.reason,
+            "rule_type": policy_result.rule_type,
+        },
+    )
+
+    if policy_result.decision == Decision.BLOCK:
+        return {
+            "order_result": {"status": "blocked", "reason": policy_result.reason},
+            "messages": [AIMessage(content=(
+                f"Order blocked by policy: {policy_result.reason}"
+            ))],
+        }
+
+    # --- End policy gate ---
 
     # Add the winning product to the cart
     cart_result = add_to_cart.invoke({

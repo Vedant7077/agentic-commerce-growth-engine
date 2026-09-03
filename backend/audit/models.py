@@ -9,8 +9,10 @@ class AuditEvent(models.Model):
     order_id = models.IntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    objects = models.Manager()
+
     class Meta:
         ordering = ["created_at"]
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"[{self.event_type}] by {self.actor} at {self.created_at}"

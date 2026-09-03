@@ -11,6 +11,7 @@ Requires:
 
 import json
 import uuid
+from typing import Any
 
 from django.core.management.base import BaseCommand
 from dotenv import load_dotenv
@@ -25,19 +26,21 @@ class Command(BaseCommand):
         # Load environment variables from .env (for GEMINI_API_KEY)
         load_dotenv()
 
+        style: Any = self.style
+
         # Import graph here (after env is loaded) so the API key is available
         from agent.graph import graph
 
-        self.stdout.write(self.style.HTTP_INFO("=" * 70))  # type: ignore[attr-defined]
-        self.stdout.write(self.style.HTTP_INFO("  LangGraph Agent — Product Catalogue Pipeline"))  # type: ignore[attr-defined]
-        self.stdout.write(self.style.HTTP_INFO("=" * 70))  # type: ignore[attr-defined]
+        self.stdout.write(style.SUCCESS("=" * 70))
+        self.stdout.write(style.SUCCESS("  LangGraph Agent — Product Catalogue Pipeline"))
+        self.stdout.write(style.SUCCESS("=" * 70))
         self.stdout.write("")
 
         user_query = "Find me a mouse under ₹80000 suitable for scrolling with minimum rating of 4.0"
         request_id = str(uuid.uuid4())
 
-        self.stdout.write(self.style.HTTP_INFO(f"[User Query] {user_query}"))  # type: ignore[attr-defined]
-        self.stdout.write(self.style.HTTP_INFO(f"[Request ID] {request_id}"))  # type: ignore[attr-defined]
+        self.stdout.write(f"[User Query] {user_query}")
+        self.stdout.write(f"[Request ID] {request_id}")
         self.stdout.write("")
 
         # Invoke the graph
@@ -47,14 +50,14 @@ class Command(BaseCommand):
         })
 
         # ── Requirements ─────────────────────────────────────────────
-        self.stdout.write(self.style.SUCCESS("[Stage 1] Requirements Extracted"))  # type: ignore[attr-defined]
+        self.stdout.write(style.SUCCESS("[Stage 1] Requirements Extracted"))
         reqs = result.get("requirements", {})
         self.stdout.write(f"  {json.dumps(reqs, indent=4, ensure_ascii=False)}")
         self.stdout.write("")
 
         # ── Candidates ───────────────────────────────────────────────
         candidates = result.get("candidates", [])
-        self.stdout.write(self.style.SUCCESS(f"[Stage 2] Catalogue Searched — {len(candidates)} results"))  # type: ignore[attr-defined]
+        self.stdout.write(style.SUCCESS(f"[Stage 2] Catalogue Searched — {len(candidates)} results"))
         for p in candidates[:5]:  # show first 5
             self.stdout.write(
                 f"  • {p.get('name', '?')} — ₹{p.get('price_paise', 0) / 100:.2f} "
@@ -66,11 +69,11 @@ class Command(BaseCommand):
 
         # ── Top 3 Scored ─────────────────────────────────────────────
         top = result.get("top_products", [])
-        self.stdout.write(self.style.SUCCESS(f"[Stage 3] Top {len(top)} Scored Products"))  # type: ignore[attr-defined]
+        self.stdout.write(style.SUCCESS(f"[Stage 3] Top {len(top)} Scored Products"))
         for i, p in enumerate(top, 1):
             comp = p.get("score_components", {})
             self.stdout.write(
-                self.style.WARNING(f"  #{i}: {p.get('name', '?')} — Score: {p.get('score', 0):.4f}")  # type: ignore[attr-defined]
+                style.WARNING(f"  #{i}: {p.get('name', '?')} — Score: {p.get('score', 0):.4f}")
             )
             self.stdout.write(
                 f"       price_fit={comp.get('price_fit', 0):.4f}  "
@@ -83,18 +86,18 @@ class Command(BaseCommand):
         self.stdout.write("")
 
         # ── Explanation ──────────────────────────────────────────────
-        self.stdout.write(self.style.SUCCESS("[Stage 4] Explanation"))  # type: ignore[attr-defined]
+        self.stdout.write(style.SUCCESS("[Stage 4] Explanation"))
         self.stdout.write(f"  {result.get('explanation', '(none)')}")
         self.stdout.write("")
 
         # ── DB Audit Verification ────────────────────────────────────
         from audit.models import AuditEvent
 
-        audit_records = AuditEvent.objects.filter(payload__request_id=request_id)  # type: ignore[attr-defined]
-        self.stdout.write(self.style.SUCCESS(f"[Audit DB Check] Found {audit_records.count()} persisted audit event(s):"))  # type: ignore[attr-defined]
+        audit_records = AuditEvent.objects.filter(payload__request_id=request_id)
+        self.stdout.write(style.SUCCESS(f"[Audit DB Check] Found {audit_records.count()} persisted audit event(s):"))
         for record in audit_records:
             self.stdout.write(f"  • {record.event_type} (actor={record.actor}, id={record.id})")
         self.stdout.write("")
 
-        self.stdout.write(self.style.HTTP_INFO("=" * 70))  # type: ignore[attr-defined]
-        self.stdout.write(self.style.SUCCESS("Agent pipeline complete."))  # type: ignore[attr-defined]
+        self.stdout.write(style.SUCCESS("=" * 70))
+        self.stdout.write(style.SUCCESS("Agent pipeline complete."))

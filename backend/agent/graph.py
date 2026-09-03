@@ -1,8 +1,12 @@
 """
 LangGraph state graph for the product catalogue agent.
 
-Deterministic 4-node pipeline:
-  extract_requirements → search_catalogue → score_and_rank → explain_selection → END
+Deterministic 6-node pipeline with human-in-the-loop checkout:
+  extract_requirements → search_catalogue → score_and_rank → explain_selection
+    → request_confirmation ──(interrupt)──> process_confirmation → END
+
+The graph is compiled with a PostgresSaver checkpointer so that interrupt/resume
+works across separate HTTP requests (POST /agent/start/ and POST /agent/<id>/confirm/).
 
 Each node records an audit event with a shared request_id for correlation.
 """
@@ -16,13 +20,16 @@ from typing_extensions import TypedDict
 
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
+from langgraph.types import interrupt, Command
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
+from audit.models import AuditEvent
 from audit.services import record_audit_event
 from .scoring import score_product_detailed
-from .tools import search_catalogue
+from .tools import search_catalogue, add_to_cart, create_order
+
 
 # ---------------------------------------------------------------------------
 # State
@@ -32,10 +39,13 @@ from .tools import search_catalogue
 class State(TypedDict):
     messages: Annotated[list, add_messages]
     request_id: str
+    user_id: int
     requirements: dict
     candidates: list[dict]
     top_products: list[dict]
     explanation: str
+    pending_confirmation: dict
+    order_result: dict
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +114,7 @@ def extract_requirements(state: State) -> dict:
         user_msg = ""
 
     structured_llm = _extraction_model.with_structured_output(Requirements)
-    
+
     try:
         response = structured_llm.invoke([
             SystemMessage(content=_EXTRACTION_SYSTEM),
@@ -278,6 +288,174 @@ def explain_selection(state: State) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Node 5: Request Confirmation (interrupt)
+# ---------------------------------------------------------------------------
+
+
+def request_confirmation(state: State) -> dict:
+    """Build a confirmation payload and interrupt the graph for human approval."""
+    top_products = state.get("top_products", [])
+
+    if not top_products:
+        # Nothing to confirm — skip ahead with a rejection
+        return {
+            "pending_confirmation": {"status": "no_products"},
+            "order_result": {"status": "no_products"},
+        }
+
+    winner = top_products[0]
+    confirmation_payload = {
+        "product_id": winner.get("id"),
+        "product_name": winner.get("name", "Unknown"),
+        "price_paise": winner.get("price_paise", 0),
+        "price_display": f"₹{winner.get('price_paise', 0) / 100:.2f}",
+        "explanation": state.get("explanation", ""),
+        "score": winner.get("score"),
+    }
+
+    # Audit: authorization requested — guarded so re-entry after interrupt resume
+    # doesn't produce a duplicate event in the audit trail.
+    request_id = state["request_id"]
+    if not AuditEvent.objects.filter(
+        event_type="user_authorization_requested",
+        payload__request_id=request_id,
+    ).exists():
+        record_audit_event(
+            event_type="user_authorization_requested",
+            actor="agent",
+            payload={
+                "request_id": request_id,
+                "product": confirmation_payload["product_name"],
+                "price": confirmation_payload["price_display"],
+                "explanation": confirmation_payload["explanation"],
+            },
+        )
+
+    # Halt the graph — this returns the payload to the caller and suspends
+    # execution. The graph can be resumed via Command(resume=...).
+    approval = interrupt(confirmation_payload)
+
+    # After resume, `approval` contains the value passed in Command(resume=...).
+    # Record the decision.
+    approved = approval.get("approved", False) if isinstance(approval, dict) else bool(approval)
+
+    record_audit_event(
+        event_type="user_authorization_received",
+        actor="agent",
+        payload={
+            "request_id": state["request_id"],
+            "approved": approved,
+        },
+    )
+
+    return {
+        "pending_confirmation": {
+            **confirmation_payload,
+            "approved": approved,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Node 6: Process Confirmation (after resume)
+# ---------------------------------------------------------------------------
+
+
+def process_confirmation(state: State) -> dict:
+    """If approved, add the winning product to cart and create an order."""
+    confirmation = state.get("pending_confirmation", {})
+    approved = confirmation.get("approved", False)
+
+    if not approved:
+        return {
+            "order_result": {"status": "rejected"},
+            "messages": [AIMessage(content="Order was not approved. No action taken.")],
+        }
+
+    user_id = state.get("user_id")
+    product_id = confirmation.get("product_id")
+
+    if not user_id or not product_id:
+        return {
+            "order_result": {"status": "error", "detail": "Missing user_id or product_id"},
+            "messages": [AIMessage(content="Cannot create order: missing user or product information.")],
+        }
+
+    # Add the winning product to the cart
+    cart_result = add_to_cart.invoke({
+        "user_id": user_id,
+        "product_id": product_id,
+        "quantity": 1,
+    })
+
+    # Create the order (this also creates the Razorpay order)
+    order_result = create_order.invoke({"user_id": user_id})
+
+    record_audit_event(
+        event_type="checkout_completed",
+        actor="agent",
+        payload={
+            "request_id": state["request_id"],
+            "user_id": user_id,
+            "product_id": product_id,
+            "order_id": order_result.get("id"),
+            "razorpay_order_id": order_result.get("razorpay_order_id"),
+        },
+    )
+
+    return {
+        "order_result": order_result,
+        "messages": [AIMessage(content=(
+            f"Order created successfully! "
+            f"Order ID: {order_result.get('id')}, "
+            f"Razorpay Order: {order_result.get('razorpay_order_id')}"
+        ))],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Checkpointer
+# ---------------------------------------------------------------------------
+
+
+def _build_checkpointer():
+    """Build a PostgresSaver from Django's DATABASES settings.
+
+    Uses psycopg (v3) connection pool with autocommit and dict_row as
+    required by langgraph-checkpoint-postgres.
+    """
+    from psycopg import Connection
+    from psycopg_pool import ConnectionPool
+    from psycopg.rows import dict_row
+    from langgraph.checkpoint.postgres import PostgresSaver
+
+    db = {
+        "dbname": os.environ.get("POSTGRES_DB", "agentic_commerce"),
+        "user": os.environ.get("POSTGRES_USER", "postgres"),
+        "password": os.environ.get("POSTGRES_PASSWORD", "postgres"),
+        "host": os.environ.get("POSTGRES_HOST", "localhost"),
+        "port": os.environ.get("POSTGRES_PORT", "5432"),
+    }
+    conninfo = (
+        f"postgresql://{db['user']}:{db['password']}"
+        f"@{db['host']}:{db['port']}/{db['dbname']}"
+    )
+
+    pool: ConnectionPool[Connection[dict[str, Any]]] = ConnectionPool(
+        conninfo=conninfo,
+        kwargs={"autocommit": True, "row_factory": dict_row},
+    )
+
+    checkpointer = PostgresSaver(pool)
+    checkpointer.setup()
+
+    return checkpointer
+
+
+checkpointer = _build_checkpointer()
+
+
+# ---------------------------------------------------------------------------
 # Graph
 # ---------------------------------------------------------------------------
 
@@ -287,11 +465,15 @@ builder.add_node("extract_requirements", extract_requirements)
 builder.add_node("search_catalogue", search_catalogue_node)
 builder.add_node("score_and_rank", score_and_rank)
 builder.add_node("explain_selection", explain_selection)
+builder.add_node("request_confirmation", request_confirmation)
+builder.add_node("process_confirmation", process_confirmation)
 
 builder.set_entry_point("extract_requirements")
 builder.add_edge("extract_requirements", "search_catalogue")
 builder.add_edge("search_catalogue", "score_and_rank")
 builder.add_edge("score_and_rank", "explain_selection")
-builder.add_edge("explain_selection", END)
+builder.add_edge("explain_selection", "request_confirmation")
+builder.add_edge("request_confirmation", "process_confirmation")
+builder.add_edge("process_confirmation", END)
 
-graph = builder.compile()
+graph = builder.compile(checkpointer=checkpointer)

@@ -8,15 +8,17 @@ so the Django dev server must be running for the agent to work.
 import httpx
 from langchain_core.tools import tool
 
-BASE_URL = "http://localhost:8000"
+import os
+
+BASE_URL = os.environ.get("DJANGO_BASE_URL", "http://127.0.0.1:8000")
 
 
 @tool
 def search_catalogue(
     query: str,
-    category: str = None,
-    min_price: int = None,
-    max_price: int = None,
+    category: str | None = None,
+    min_price: int | None = None,
+    max_price: int | None = None,
 ) -> list[dict]:
     """Search the product catalogue.
 
@@ -75,3 +77,90 @@ def compare_products(product_ids: list[int]) -> list[dict]:
         response.raise_for_status()
         products.append(response.json())
     return products
+
+
+@tool
+def add_to_cart(user_id: int, product_id: int, quantity: int = 1) -> dict:
+    """Add a product to the user's cart.
+
+    Args:
+        user_id: The numeric ID of the user.
+        product_id: The numeric ID of the product to add.
+        quantity: Number of units to add (default 1).
+
+    Returns:
+        The updated cart dict from the orders API.
+    """
+    response = httpx.post(
+        f"{BASE_URL}/cart/items/",
+        json={"user_id": user_id, "product_id": product_id, "quantity": quantity},
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+@tool
+def create_order(user_id: int) -> dict:
+    """Create an order from the user's current cart and generate a Razorpay payment order.
+
+    This converts the user's cart into a Django Order with OrderItems,
+    then invokes the Razorpay SDK to create a corresponding payment order.
+
+    Args:
+        user_id: The numeric ID of the user whose cart should be converted to an order.
+
+    Returns:
+        A dict with the Django order details including the razorpay_order_id.
+    """
+    import uuid
+    from accounts.models import User
+    from orders.models import Cart, Order, OrderItem
+    from payments.services import create_razorpay_order
+
+    # Look up user
+    user = User.objects.get(pk=user_id)
+
+    # Look up cart
+    cart = Cart.objects.prefetch_related("items__product").get(user=user)
+    cart_items = cart.items.select_related("product").all()
+    if not cart_items.exists():
+        return {"status": "error", "detail": "Cart is empty."}
+
+    # Create the Django order
+    order = Order.objects.create(
+        user=user,
+        idempotency_key=str(uuid.uuid4()),
+        status="pending",
+    )
+
+    total = 0
+    order_items = []
+    for ci in cart_items:
+        price_snapshot = ci.product.price_paise
+        order_items.append(
+            OrderItem(
+                order=order,
+                product=ci.product,
+                quantity=ci.quantity,
+                price_paise_at_purchase=price_snapshot,
+            )
+        )
+        total += price_snapshot * ci.quantity
+
+    OrderItem.objects.bulk_create(order_items)
+    order.total_paise = total
+    order.save(update_fields=["total_paise"])
+
+    # Clear cart
+    cart_items.delete()
+
+    # Create a Razorpay order for payment
+    rzp_order = create_razorpay_order(order)
+
+    return {
+        "id": order.pk,
+        "status": "confirmed",
+        "total_paise": order.total_paise,
+        "razorpay_order_id": rzp_order["id"],
+    }
+

@@ -141,3 +141,105 @@ class OrderTests(TestCase):
         )
         self.assertEqual(events.count(), 1)
         self.assertEqual(events.first().actor, self.user.email)
+
+
+class IdempotencyTests(TestCase):
+    """Test that idempotency keys prevent duplicate order creation."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create(
+            name="Idemp User", email="idemp@example.com", spending_limit_paise=5000000
+        )
+        self.product = Product.objects.create(
+            name="Idemp Product",
+            category="keyboards",
+            price_paise=200000,
+            rating=4.0,
+            stock=10,
+            description="A product for idempotency testing.",
+        )
+
+    def _add_to_cart(self):
+        """Helper: add a product to the user's cart."""
+        self.client.post(
+            "/cart/items/",
+            {"user_id": self.user.pk, "product_id": self.product.pk, "quantity": 1},
+            format="json",
+        )
+
+    def test_same_idempotency_key_returns_existing_order(self):
+        """Submitting the same idempotency_key twice returns the same order, not a duplicate."""
+        self._add_to_cart()
+        key = "idemp-abc-123"
+
+        # First call — creates the order
+        resp1 = self.client.post(
+            "/orders/",
+            {"user_id": self.user.pk, "idempotency_key": key},
+            format="json",
+        )
+        self.assertIn(resp1.status_code, (200, 201))
+        order_id_1 = resp1.data["id"]
+
+        # Re-add item so the "cart is empty" guard doesn't block the second call
+        self._add_to_cart()
+
+        # Second call — same key, should return existing order
+        resp2 = self.client.post(
+            "/orders/",
+            {"user_id": self.user.pk, "idempotency_key": key},
+            format="json",
+        )
+        self.assertEqual(resp2.status_code, 200)
+        order_id_2 = resp2.data["id"]
+
+        # Same order PK returned
+        self.assertEqual(order_id_1, order_id_2)
+
+        # Only one Order exists in DB with this key
+        self.assertEqual(Order.objects.filter(idempotency_key=key).count(), 1)
+
+    def test_different_keys_create_separate_orders(self):
+        """Two different idempotency keys produce two distinct orders."""
+        self._add_to_cart()
+        resp1 = self.client.post(
+            "/orders/",
+            {"user_id": self.user.pk, "idempotency_key": "key-alpha"},
+            format="json",
+        )
+        self.assertIn(resp1.status_code, (200, 201))
+
+        # Re-add item
+        self._add_to_cart()
+
+        resp2 = self.client.post(
+            "/orders/",
+            {"user_id": self.user.pk, "idempotency_key": "key-beta"},
+            format="json",
+        )
+        self.assertIn(resp2.status_code, (200, 201))
+
+        self.assertNotEqual(resp1.data["id"], resp2.data["id"])
+        self.assertEqual(Order.objects.count(), 2)
+
+    def test_out_of_stock_product_returns_error(self):
+        """Ordering a product with stock=0 returns an error without crashing."""
+        self._add_to_cart()
+        # Set stock to 0
+        self.product.stock = 0
+        self.product.save()
+
+        resp = self.client.post(
+            "/orders/",
+            {"user_id": self.user.pk},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("out of stock", resp.data["detail"])
+
+        # Audit event recorded
+        self.assertTrue(
+            AuditEvent.objects.filter(event_type="product_unavailable_failed").exists()
+        )
+

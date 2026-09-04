@@ -1,0 +1,95 @@
+{
+  "name": "Agentic Commerce - Failure Alert",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "audit-failure",
+        "responseMode": "onReceived",
+        "responseData": "{\"status\": \"received\"}",
+        "options": {}
+      },
+      "id": "1a2b3c4d-0001-4000-8000-000000000001",
+      "name": "Audit Failure Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "audit-failure-webhook"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "assign-1",
+              "name": "alert_message",
+              "value": "={{ \"🚨 *Agentic Commerce Failure Alert*\\n\\n*Event:* \" + $json.body.event_type + \"\\n*Order ID:* \" + ($json.body.order_id || \"N/A\") + \"\\n*Actor:* \" + ($json.body.actor || \"unknown\") + \"\\n*Reason:* \" + ($json.body.reason || \"No reason provided\") + \"\\n*Time:* \" + $now.toISO() }}",
+              "type": "string"
+            },
+            {
+              "id": "assign-2",
+              "name": "raw_event_type",
+              "value": "={{ $json.body.event_type }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "1a2b3c4d-0002-4000-8000-000000000002",
+      "name": "Format Alert Message",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "YOUR_SLACK_INCOMING_WEBHOOK_URL_HERE",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"text\": $json.alert_message } }}",
+        "options": {}
+      },
+      "id": "1a2b3c4d-0003-4000-8000-000000000003",
+      "name": "Send Slack Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300]
+    }
+  ],
+  "connections": {
+    "Audit Failure Webhook": {
+      "main": [
+        [
+          {
+            "node": "Format Alert Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Alert Message": {
+      "main": [
+        [
+          {
+            "node": "Send Slack Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

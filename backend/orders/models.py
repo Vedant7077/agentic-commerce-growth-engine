@@ -1,3 +1,4 @@
+from django.core.exceptions import ObjectDoesNotExist
 from django.db import models
 
 from accounts.models import User
@@ -11,6 +12,9 @@ class Cart(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     objects = models.Manager()
+
+    class DoesNotExist(ObjectDoesNotExist):
+        pass
 
     def __str__(self) -> str:
         return f"Cart #{self.pk} for {self.user.name}"
@@ -49,10 +53,13 @@ class Order(models.Model):
         max_length=20, choices=STATUS_CHOICES, default="pending"
     )
     razorpay_order_id = models.CharField(max_length=255, null=True, blank=True)
-    idempotency_key = models.CharField(max_length=255, unique=True)
+    idempotency_key = models.CharField(max_length=255, unique=True, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     objects = models.Manager()
+
+    class DoesNotExist(ObjectDoesNotExist):
+        pass
 
     class Meta:
         ordering = ["-created_at"]

@@ -1,3 +1,4 @@
+from django.core.exceptions import ObjectDoesNotExist
 from django.db import models
 
 
@@ -13,6 +14,9 @@ class Product(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     objects = models.Manager()
+
+    class DoesNotExist(ObjectDoesNotExist):
+        pass
 
     class Meta:
         ordering = ["-created_at"]

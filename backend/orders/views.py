@@ -98,14 +98,17 @@ def get_cart(request):
 def create_order(request):
     """
     POST /orders/
-    Body: { "user_id": int }
+    Body: { "user_id": int, "idempotency_key": str (optional) }
     Creates an Order + OrderItems from the user's current cart,
     snapshotting price_paise_at_purchase from each product's current price.
+    If an idempotency_key is provided and an Order with that key already exists,
+    the existing order is returned without creating a duplicate.
     """
     serializer = CreateOrderSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
 
     user_id = serializer.validated_data["user_id"]
+    idempotency_key = serializer.validated_data.get("idempotency_key")
 
     try:
         user = User.objects.get(pk=user_id)
@@ -113,6 +116,14 @@ def create_order(request):
         return Response(
             {"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND
         )
+
+    # --- Idempotency check ---
+    if idempotency_key:
+        existing_order = Order.objects.filter(idempotency_key=idempotency_key).first()
+        if existing_order:
+            return Response(
+                OrderReadSerializer(existing_order).data, status=status.HTTP_200_OK
+            )
 
     try:
         cart = Cart.objects.prefetch_related("items__product").get(user=user)
@@ -128,10 +139,42 @@ def create_order(request):
             {"detail": "Cart is empty."}, status=status.HTTP_400_BAD_REQUEST
         )
 
+    # --- Product availability check ---
+    for ci in cart_items:
+        try:
+            product = Product.objects.get(pk=ci.product_id)
+        except Product.DoesNotExist:
+            record_audit_event(
+                event_type="product_unavailable_failed",
+                actor=user.email,
+                payload={
+                    "product_id": ci.product_id,
+                    "reason": "Product no longer exists",
+                },
+            )
+            return Response(
+                {"detail": f"Product {ci.product_id} no longer exists."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if product.stock <= 0:
+            record_audit_event(
+                event_type="product_unavailable_failed",
+                actor=user.email,
+                payload={
+                    "product_id": product.pk,
+                    "product_name": product.name,
+                    "reason": "Product out of stock",
+                },
+            )
+            return Response(
+                {"detail": f"Product '{product.name}' is out of stock."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
     # Create order
     order = Order.objects.create(
         user=user,
-        idempotency_key=str(uuid.uuid4()),
+        idempotency_key=idempotency_key or str(uuid.uuid4()),
         status="pending",
     )
 
@@ -172,3 +215,4 @@ def create_order(request):
     return Response(
         OrderReadSerializer(order).data, status=status.HTTP_201_CREATED
     )
+

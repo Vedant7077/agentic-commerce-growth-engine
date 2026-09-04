@@ -57,3 +57,15 @@ class AuditEventViewTests(TestCase):
         self.assertEqual(event.event_type, "test_event")
         self.assertEqual(event.reason, "testing")
         self.assertEqual(AuditEvent.objects.filter(order_id=100).count(), 1)
+
+    def test_record_audit_event_extracts_order_id_from_payload(self):
+        """record_audit_event() extracts order_id and reason from payload if not explicitly passed."""
+        event = record_audit_event(
+            event_type="checkout_failed",
+            actor="agent",
+            payload={"order_id": 55, "detail": "Payment timeout"},
+        )
+        self.assertEqual(event.order_id, 55)
+        self.assertEqual(event.reason, "Payment timeout")
+        self.assertEqual(AuditEvent.objects.filter(order_id=55).count(), 1)
+

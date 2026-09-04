@@ -53,14 +53,16 @@ class State(TypedDict):
 # Models
 # ---------------------------------------------------------------------------
 
+_MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
+
 _extraction_model = ChatGoogleGenerativeAI(
-    model="gemini-3.6-flash",
+    model=_MODEL_NAME,
     google_api_key=os.environ.get("GEMINI_API_KEY"),
     response_mime_type="application/json",
 )
 
 _explanation_model = ChatGoogleGenerativeAI(
-    model="gemini-3.6-flash",
+    model=_MODEL_NAME,
     google_api_key=os.environ.get("GEMINI_API_KEY"),
 )
 
@@ -104,7 +106,13 @@ class Requirements(BaseModel):
     required_features: list[str] = Field(default_factory=list, description="list of feature keywords (strings)")
 
 def extract_requirements(state: State) -> dict:
-    """Use Gemini structured output to turn the user message into structured requirements."""
+    """Use Gemini structured output to turn the user message into structured requirements.
+
+    If the initial Gemini call returns a malformed/unparseable response, logs
+    an audit event with event_type 'malformed_ai_response' and retries once
+    with a corrective follow-up prompt. If the retry also fails, falls back
+    to empty requirements.
+    """
     user_msg = None
     for msg in reversed(state["messages"]):
         if isinstance(msg, HumanMessage):
@@ -114,23 +122,64 @@ def extract_requirements(state: State) -> dict:
     if not user_msg:
         user_msg = ""
 
+    request_id = state.get("request_id", str(uuid.uuid4()))
     structured_llm = _extraction_model.with_structured_output(Requirements)
 
+    _EMPTY_REQUIREMENTS = {
+        "category": None,
+        "max_price": None,
+        "min_rating": None,
+        "required_features": [],
+    }
+
+    requirements = None
+
+    # --- First attempt ---
     try:
         response = structured_llm.invoke([
             SystemMessage(content=_EXTRACTION_SYSTEM),
             HumanMessage(content=user_msg),
         ])
         requirements = response.model_dump() if hasattr(response, "model_dump") else response
-    except Exception:
-        requirements = {
-            "category": None,
-            "max_price": None,
-            "min_rating": None,
-            "required_features": [],
-        }
+    except Exception as first_error:
+        # Log malformed response audit event
+        record_audit_event(
+            event_type="malformed_ai_response",
+            actor="agent",
+            payload={
+                "request_id": request_id,
+                "user_message": user_msg,
+                "error": str(first_error),
+                "attempt": 1,
+            },
+        )
 
-    request_id = state.get("request_id", str(uuid.uuid4()))
+        # --- Retry once with corrective prompt ---
+        try:
+            corrective_prompt = (
+                "Your previous response was malformed and could not be parsed. "
+                "Please return ONLY a valid JSON object with exactly these keys: "
+                'category, max_price, min_rating, required_features. '
+                f"Original user request: {user_msg}"
+            )
+            response = structured_llm.invoke([
+                SystemMessage(content=_EXTRACTION_SYSTEM),
+                HumanMessage(content=corrective_prompt),
+            ])
+            requirements = response.model_dump() if hasattr(response, "model_dump") else response
+        except Exception as retry_error:
+            record_audit_event(
+                event_type="malformed_ai_response",
+                actor="agent",
+                payload={
+                    "request_id": request_id,
+                    "user_message": user_msg,
+                    "error": str(retry_error),
+                    "attempt": 2,
+                    "fallback": True,
+                },
+            )
+            requirements = _EMPTY_REQUIREMENTS
 
     record_audit_event(
         event_type="requirements_extracted",
@@ -254,22 +303,47 @@ def explain_selection(state: State) -> dict:
             )
         summary_text = "\n".join(product_summaries)
 
-        response = _explanation_model.invoke([
-            SystemMessage(content=_EXPLANATION_SYSTEM),
-            HumanMessage(content=f"Top-3 scored products:\n{summary_text}"),
-        ])
-        if isinstance(response.content, str):
-            explanation = response.content
-        elif isinstance(response.content, list):
-            text_blocks = []
-            for item in response.content:
-                if isinstance(item, dict) and "text" in item:
-                    text_blocks.append(item["text"])
-                elif isinstance(item, str):
-                    text_blocks.append(item)
-            explanation = "".join(text_blocks) if text_blocks else str(response.content)
+        response = None
+        try:
+            response = _explanation_model.invoke([
+                SystemMessage(content=_EXPLANATION_SYSTEM),
+                HumanMessage(content=f"Top-3 scored products:\n{summary_text}"),
+            ])
+        except Exception:
+            for fallback_m in ["gemini-3.7-flash", "gemini-flash-latest"]:
+                try:
+                    fallback_llm = ChatGoogleGenerativeAI(
+                        model=fallback_m,
+                        google_api_key=os.environ.get("GEMINI_API_KEY"),
+                    )
+                    response = fallback_llm.invoke([
+                        SystemMessage(content=_EXPLANATION_SYSTEM),
+                        HumanMessage(content=f"Top-3 scored products:\n{summary_text}"),
+                    ])
+                    if response and response.content:
+                        break
+                except Exception:
+                    continue
+
+        if response and response.content:
+            if isinstance(response.content, str):
+                explanation = response.content
+            elif isinstance(response.content, list):
+                text_blocks = []
+                for item in response.content:
+                    if isinstance(item, dict) and "text" in item:
+                        text_blocks.append(item["text"])
+                    elif isinstance(item, str):
+                        text_blocks.append(item)
+                explanation = "".join(text_blocks) if text_blocks else str(response.content)
+            else:
+                explanation = str(response.content)
         else:
-            explanation = str(response.content)
+            top = top_products[0]
+            explanation = (
+                f"Selected {top.get('name', 'Product')} with score {top.get('score', 0):.2f} "
+                f"for optimal price fit (₹{top.get('price_paise', 0) / 100:.2f}) and rating ({top.get('rating', 0)}/5)."
+            )
 
     record_audit_event(
         event_type="product_selected",
@@ -363,7 +437,11 @@ def request_confirmation(state: State) -> dict:
 
 
 def process_confirmation(state: State) -> dict:
-    """If approved, add the winning product to cart and create an order."""
+    """If approved, add the winning product to cart and create an order.
+
+    Uses a deterministic idempotency key derived from request_id + user_id
+    so that graph re-entry (e.g. after a crash/resume) won't create duplicate orders.
+    """
     confirmation = state.get("pending_confirmation", {})
     approved = confirmation.get("approved", False)
 
@@ -415,6 +493,10 @@ def process_confirmation(state: State) -> dict:
 
     # --- End policy gate ---
 
+    # Deterministic idempotency key from request_id + user_id
+    # Ensures graph re-entry after crash/resume won't create duplicates.
+    idem_key = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{state['request_id']}:{user_id}"))
+
     # Add the winning product to the cart
     cart_result = add_to_cart.invoke({
         "user_id": user_id,
@@ -423,19 +505,50 @@ def process_confirmation(state: State) -> dict:
     })
 
     # Create the order (this also creates the Razorpay order)
-    order_result = create_order.invoke({"user_id": user_id})
+    # Pass the deterministic idempotency key for duplicate prevention.
+    order_result = create_order.invoke({
+        "user_id": user_id,
+        "idempotency_key": idem_key,
+        "request_id": state["request_id"],
+    })
 
-    record_audit_event(
-        event_type="checkout_completed",
-        actor="agent",
-        payload={
-            "request_id": state["request_id"],
-            "user_id": user_id,
-            "product_id": product_id,
-            "order_id": order_result.get("id"),
-            "razorpay_order_id": order_result.get("razorpay_order_id"),
-        },
-    )
+    order_status = order_result.get("status", "")
+    oid = order_result.get("id")
+
+    if oid:
+        try:
+            AuditEvent.objects.filter(payload__request_id=state["request_id"], order_id__isnull=True).update(order_id=oid)
+        except Exception:
+            pass
+
+    if order_status == "confirmed":
+        record_audit_event(
+            event_type="checkout_completed",
+            actor="agent",
+            payload={
+                "request_id": state["request_id"],
+                "user_id": user_id,
+                "product_id": product_id,
+                "order_id": oid,
+                "razorpay_order_id": order_result.get("razorpay_order_id"),
+            },
+            order_id=oid,
+        )
+    else:
+        record_audit_event(
+            event_type="checkout_failed",
+            actor="agent",
+            payload={
+                "request_id": state["request_id"],
+                "user_id": user_id,
+                "product_id": product_id,
+                "order_id": oid,
+                "status": order_status,
+                "detail": order_result.get("detail", ""),
+            },
+            reason=order_result.get("detail", "Order checkout failed"),
+            order_id=oid,
+        )
 
     return {
         "order_result": order_result,
@@ -443,6 +556,8 @@ def process_confirmation(state: State) -> dict:
             f"Order created successfully! "
             f"Order ID: {order_result.get('id')}, "
             f"Razorpay Order: {order_result.get('razorpay_order_id')}"
+        ) if order_status == "confirmed" else (
+            f"Order failed: {order_result.get('detail', order_status)}"
         ))],
     }
 

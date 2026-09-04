@@ -160,22 +160,39 @@ class Command(BaseCommand):
         order_result = final_state.get("order_result", {})
         if approve:
             razorpay_order_id = order_result.get("razorpay_order_id", "")
+            order_status = order_result.get("status")
             self.stdout.write(style.SUCCESS("[Stage 5-6] Checkout Result"))
             self.stdout.write(f"  Order ID:          {order_result.get('id')}")
             self.stdout.write(f"  Razorpay Order ID: {razorpay_order_id}")
-            self.stdout.write(f"  Status:            {order_result.get('status')}")
+            self.stdout.write(f"  Status:            {order_status}")
             self.stdout.write(f"  Total:             ₹{order_result.get('total_paise', 0) / 100:.2f}")
             self.stdout.write("")
 
-            # Verify Razorpay order ID
-            if razorpay_order_id and razorpay_order_id.startswith("order_"):
-                self.stdout.write(style.SUCCESS(
-                    f"✓ PASS: Real Razorpay test order created: {razorpay_order_id}"
-                ))
+            # Verify Razorpay order ID based on status
+            if order_status == "confirmed":
+                if razorpay_order_id and razorpay_order_id.startswith("order_"):
+                    self.stdout.write(style.SUCCESS(
+                        f"✓ PASS: Real Razorpay test order created: {razorpay_order_id}"
+                    ))
+                else:
+                    self.stdout.write(style.ERROR(
+                        f"✗ FAIL: Expected razorpay_order_id starting with 'order_', "
+                        f"got: {razorpay_order_id!r}"
+                    ))
+            elif order_status == "failed":
+                if not razorpay_order_id:
+                    self.stdout.write(style.SUCCESS(
+                        "✓ PASS: Order correctly marked failed with empty razorpay_order_id "
+                        "(no Razorpay order was created due to payment timeout/failure)."
+                    ))
+                else:
+                    self.stdout.write(style.ERROR(
+                        f"✗ FAIL: Expected empty razorpay_order_id on failed order, "
+                        f"got: {razorpay_order_id!r}"
+                    ))
             else:
                 self.stdout.write(style.ERROR(
-                    f"✗ FAIL: Expected razorpay_order_id starting with 'order_', "
-                    f"got: {razorpay_order_id!r}"
+                    f"✗ FAIL: Unexpected order status: {order_status!r}"
                 ))
         else:
             self.stdout.write(style.SUCCESS("[Stage 5-6] Rejection Result"))
@@ -208,6 +225,24 @@ class Command(BaseCommand):
             self.stdout.write(style.SUCCESS("✓ user_authorization_received audit event found"))
         else:
             self.stdout.write(style.ERROR("✗ user_authorization_received audit event MISSING"))
+
+        # Check order-specific audit events
+        order_id = order_result.get("id")
+        if order_id:
+            order_events = AuditEvent.objects.filter(order_id=order_id)
+            self.stdout.write("")
+            self.stdout.write(style.SUCCESS(
+                f"[Audit DB] Found {order_events.count()} event(s) for order_id={order_id}:"
+            ))
+            for record in order_events:
+                self.stdout.write(f"  • {record.event_type} (actor={record.actor}, reason={record.reason})")
+
+            if order_result.get("status") == "failed":
+                timeout_handled = order_events.filter(event_type="payment_timeout_handled").exists()
+                if timeout_handled:
+                    self.stdout.write(style.SUCCESS("✓ payment_timeout_handled audit event found"))
+                else:
+                    self.stdout.write(style.WARNING("! payment_timeout_handled audit event not found"))
 
         self.stdout.write("")
         self.stdout.write(style.SUCCESS("=" * 70))

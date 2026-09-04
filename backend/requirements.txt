@@ -1,6 +1,8 @@
 Django
 djangorestframework
 psycopg2-binary
+psycopg[binary]
+psycopg-pool
 python-dotenv
 Faker
 langgraph
@@ -9,3 +11,4 @@ google-genai==2.20.0, <3.0.0
 httpx
 langgraph-checkpoint-postgres
 razorpay
+requests

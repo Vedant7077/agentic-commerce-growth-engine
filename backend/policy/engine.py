@@ -48,6 +48,18 @@ def check_policy(user_id: int, proposed_order: dict) -> PolicyResult:
     )
 
     # --- 1. Spending limit (BLOCK) ---
+    from accounts.models import User
+    user = User.objects.filter(id=user_id).first()
+    if user and user.spending_limit_paise > 0 and total_paise > user.spending_limit_paise:
+        return PolicyResult(
+            decision=Decision.BLOCK,
+            reason=(
+                f"Order total ₹{total_paise / 100:.2f} exceeds "
+                f"spending limit ₹{user.spending_limit_paise / 100:.2f}"
+            ),
+            rule_type="spending_limit",
+        )
+
     for rule in rules.filter(rule_type="spending_limit"):
         if total_paise > rule.threshold_paise:
             return PolicyResult(

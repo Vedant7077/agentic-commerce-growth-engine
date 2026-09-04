@@ -100,22 +100,48 @@ def add_to_cart(user_id: int, product_id: int, quantity: int = 1) -> dict:
 
 
 @tool
-def create_order(user_id: int) -> dict:
+def create_order(
+    user_id: int,
+    idempotency_key: str | None = None,
+    request_id: str | None = None,
+) -> dict:
     """Create an order from the user's current cart and generate a Razorpay payment order.
 
     This converts the user's cart into a Django Order with OrderItems,
     then invokes the Razorpay SDK to create a corresponding payment order.
+    Uses an idempotency key to prevent duplicate orders on retry.
 
     Args:
         user_id: The numeric ID of the user whose cart should be converted to an order.
+        idempotency_key: Optional unique key for idempotent order creation.
+        request_id: Optional correlation ID for tracing and audit logging.
 
     Returns:
         A dict with the Django order details including the razorpay_order_id.
     """
     import uuid
     from accounts.models import User
+    from catalogue.models import Product
     from orders.models import Cart, Order, OrderItem
-    from payments.services import create_razorpay_order
+    from payments.services import (
+        create_razorpay_order,
+        handle_razorpay_timeout,
+        RazorpayTimeoutError,
+    )
+    from audit.services import record_audit_event
+
+    # Generate idempotency key if not provided
+    idem_key = idempotency_key or str(uuid.uuid4())
+
+    # --- Idempotency check: return existing order if key matches ---
+    existing_order = Order.objects.filter(idempotency_key=idem_key).first()
+    if existing_order:
+        return {
+            "id": existing_order.pk,
+            "status": existing_order.status,
+            "total_paise": existing_order.total_paise,
+            "razorpay_order_id": existing_order.razorpay_order_id or "",
+        }
 
     # Look up user
     user = User.objects.get(pk=user_id)
@@ -126,10 +152,44 @@ def create_order(user_id: int) -> dict:
     if not cart_items.exists():
         return {"status": "error", "detail": "Cart is empty."}
 
+    # --- Product availability check ---
+    for ci in cart_items:
+        try:
+            product = Product.objects.get(pk=ci.product_id)
+        except Product.DoesNotExist:
+            record_audit_event(
+                event_type="product_unavailable_failed",
+                actor="agent",
+                payload={
+                    "user_id": user_id,
+                    "product_id": ci.product_id,
+                    "reason": "Product no longer exists",
+                },
+            )
+            return {
+                "status": "error",
+                "detail": f"Product {ci.product_id} no longer exists.",
+            }
+        if product.stock <= 0:
+            record_audit_event(
+                event_type="product_unavailable_failed",
+                actor="agent",
+                payload={
+                    "user_id": user_id,
+                    "product_id": product.pk,
+                    "product_name": product.name,
+                    "reason": "Product out of stock",
+                },
+            )
+            return {
+                "status": "error",
+                "detail": f"Product '{product.name}' is out of stock.",
+            }
+
     # Create the Django order
     order = Order.objects.create(
         user=user,
-        idempotency_key=str(uuid.uuid4()),
+        idempotency_key=idem_key,
         status="pending",
     )
 
@@ -154,8 +214,31 @@ def create_order(user_id: int) -> dict:
     # Clear cart
     cart_items.delete()
 
-    # Create a Razorpay order for payment
-    rzp_order = create_razorpay_order(order)
+    # Create a Razorpay order for payment (with timeout handling)
+    try:
+        rzp_order = create_razorpay_order(order)
+    except RazorpayTimeoutError:
+        record_audit_event(
+            event_type="razorpay_timeout",
+            actor="system",
+            payload={
+                "request_id": request_id,
+                "order_id": order.pk,
+                "user_id": user_id,
+                "total_paise": total,
+            },
+            order_id=order.pk,
+        )
+        # Attempt recovery: check before retry
+        rzp_order = handle_razorpay_timeout(order, request_id=request_id)
+        if rzp_order is None:
+            return {
+                "id": order.pk,
+                "status": "failed",
+                "total_paise": order.total_paise,
+                "razorpay_order_id": "",
+                "detail": "Razorpay timeout — recovery failed.",
+            }
 
     return {
         "id": order.pk,
@@ -163,4 +246,3 @@ def create_order(user_id: int) -> dict:
         "total_paise": order.total_paise,
         "razorpay_order_id": rzp_order["id"],
     }
-

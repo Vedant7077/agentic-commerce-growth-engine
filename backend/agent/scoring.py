@@ -19,6 +19,7 @@ three weighted components:
                             multi-word features like "hot swappable" work.
 """
 
+import math
 import re
 
 # ── weights ──────────────────────────────────────────────────────────
@@ -26,11 +27,19 @@ W_PRICE = 0.40
 W_RATING = 0.35
 W_FEATURES = 0.25
 
+# ── price-fit curve parameters ───────────────────────────────────────
+_SWEET_SPOT = 0.70   # peak of the bell curve (70 % of budget)
+_SIGMA = 0.25        # width — keeps 45 %–95 % of budget in the "good" zone
+
 
 def _price_fit(price_paise: int, max_price_paise: int | None) -> float:
     """Return a [0, 1] score for how well *price_paise* fits the budget.
 
-    Rewards being comfortably under budget. Products over budget score 0.
+    Uses a Gaussian bell curve centred at 70 % of *max_price_paise* so that
+    "best value" products score highest — not the cheapest ones.  Very cheap
+    products (< 30 % of budget) are penalised because they likely sacrifice
+    quality, and anything over budget scores 0.
+
     If no budget was specified, every product scores 1.0.
     """
     if max_price_paise is None or max_price_paise <= 0:
@@ -40,8 +49,9 @@ def _price_fit(price_paise: int, max_price_paise: int | None) -> float:
         return 0.0
 
     ratio = price_paise / max_price_paise  # 0 … 1
-    score = max(0.0, min(1.0, 1.0 - ratio))
-    return score
+    # Gaussian: peaks at _SWEET_SPOT, falls off with width _SIGMA
+    score = math.exp(-((ratio - _SWEET_SPOT) ** 2) / (2 * _SIGMA ** 2))
+    return round(score, 4)
 
 
 def _rating_score(rating: float) -> float:

@@ -55,3 +55,4 @@ class OrderReadSerializer(serializers.ModelSerializer):
 class CreateOrderSerializer(serializers.Serializer):
     """Write serializer for POST /orders/"""
     user_id = serializers.IntegerField()
+    idempotency_key = serializers.CharField(max_length=255, required=False, default=None)

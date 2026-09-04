@@ -26,10 +26,53 @@ export default function ShoppingAgentDemo() {
   const [completedExplanation, setCompletedExplanation] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
 
+  // Spending Limit Policy Controls
+  const [spendingLimit, setSpendingLimit] = useState(15000);
+  const [limitSaved, setLimitSaved] = useState(false);
+
   // Audit trail
   const [auditEvents, setAuditEvents] = useState([]);
   const [auditExpanded, setAuditExpanded] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
+
+  // Load user's active spending limit from backend
+  const loadSpendingLimit = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/accounts/limit/`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.spending_limit_inr !== undefined) {
+          setSpendingLimit(data.spending_limit_inr);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to load spending limit:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadSpendingLimit();
+  }, [loadSpendingLimit]);
+
+  async function updateSpendingLimit(val) {
+    const num = Number(val);
+    if (isNaN(num) || num < 0) return;
+    try {
+      const res = await fetch(`${API_BASE}/accounts/limit/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ spending_limit_inr: num }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setSpendingLimit(data.spending_limit_inr);
+        setLimitSaved(true);
+        setTimeout(() => setLimitSaved(false), 2000);
+      }
+    } catch (err) {
+      console.error("Failed to update spending limit:", err);
+    }
+  }
 
   // Fetch audit trail for an order ID or request ID
   const fetchAuditEvents = useCallback(async (id) => {
@@ -238,6 +281,54 @@ export default function ShoppingAgentDemo() {
           <span>Agent Online</span>
         </div>
       </header>
+
+      {/* Interactive Spending Limit Policy Bar */}
+      <div className="policy-bar">
+        <div className="policy-bar-left">
+          <span className="policy-bar-icon">🛡️</span>
+          <div>
+            <div className="policy-bar-title">Active Spending Limit Policy</div>
+            <div className="policy-bar-desc">Pre-order policy gate will automatically block purchases exceeding this amount</div>
+          </div>
+        </div>
+
+        <div className="policy-bar-right">
+          <div className="limit-input-wrap">
+            <span className="currency-prefix">₹</span>
+            <input
+              type="number"
+              className="limit-input"
+              value={spendingLimit}
+              onChange={(e) => setSpendingLimit(e.target.value)}
+              onBlur={() => updateSpendingLimit(spendingLimit)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") updateSpendingLimit(spendingLimit);
+              }}
+              min="100"
+              step="500"
+              title="Click or enter new spending limit and press Enter"
+            />
+          </div>
+
+          <div className="preset-chips">
+            {[3000, 5000, 15000, 50000].map((preset) => (
+              <button
+                key={preset}
+                type="button"
+                className={`preset-chip ${Number(spendingLimit) === preset ? "preset-chip-active" : ""}`}
+                onClick={() => {
+                  setSpendingLimit(preset);
+                  updateSpendingLimit(preset);
+                }}
+              >
+                ₹{preset >= 1000 ? `${preset / 1000}k` : preset}
+              </button>
+            ))}
+          </div>
+
+          {limitSaved && <span className="limit-saved-tag">Saved ✓</span>}
+        </div>
+      </div>
 
       {/* Query Input Section */}
       <section className="card">

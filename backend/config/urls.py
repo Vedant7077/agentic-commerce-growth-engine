@@ -24,4 +24,5 @@ urlpatterns = [
     path('audit/', include('audit.urls')),
     path('agent/', include('agent.urls')),
     path('growth/', include('growth.urls')),
+    path('accounts/', include('accounts.urls')),
 ]

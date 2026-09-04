@@ -16,8 +16,10 @@ export default function ShoppingAgentDemo() {
   const [loadingStep, setLoadingStep] = useState("");
   const [threadId, setThreadId] = useState(null);
   const [orderId, setOrderId] = useState(null);
+  const [requestId, setRequestId] = useState(null);
+  const [activeAuditId, setActiveAuditId] = useState(null);
 
-  // Flow states: 'idle' | 'pending_confirmation' | 'completed' | 'order_created' | 'failed' | 'rejected'
+  // Flow states: 'idle' | 'pending_confirmation' | 'completed' | 'order_created' | 'blocked' | 'failed' | 'rejected'
   const [agentState, setAgentState] = useState("idle");
   const [pendingConfirmation, setPendingConfirmation] = useState(null);
   const [orderResult, setOrderResult] = useState(null);
@@ -29,12 +31,12 @@ export default function ShoppingAgentDemo() {
   const [auditExpanded, setAuditExpanded] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
 
-  // Fetch audit trail for an order
-  const fetchAuditEvents = useCallback(async (oid) => {
-    if (!oid) return;
+  // Fetch audit trail for an order ID or request ID
+  const fetchAuditEvents = useCallback(async (id) => {
+    if (!id) return;
     setAuditLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/audit/${oid}/`);
+      const res = await fetch(`${API_BASE}/audit/${id}/`);
       if (res.ok) {
         const data = await res.json();
         setAuditEvents(data);
@@ -46,13 +48,12 @@ export default function ShoppingAgentDemo() {
     }
   }, []);
 
-  // Poll/refresh audit trail if an order exists
+  // Poll/refresh audit trail if an active identifier exists
   useEffect(() => {
-    if (orderId) {
-      fetchAuditEvents(orderId);
-      setAuditExpanded(true);
+    if (activeAuditId) {
+      fetchAuditEvents(activeAuditId);
     }
-  }, [orderId, fetchAuditEvents]);
+  }, [activeAuditId, fetchAuditEvents]);
 
   // Handle initial shopping query
   async function handleSubmit(e) {
@@ -67,6 +68,8 @@ export default function ShoppingAgentDemo() {
     setCompletedExplanation("");
     setAuditEvents([]);
     setOrderId(null);
+    setRequestId(null);
+    setActiveAuditId(null);
 
     try {
       const res = await fetch(`${API_BASE}/agent/start/`, {
@@ -82,6 +85,10 @@ export default function ShoppingAgentDemo() {
 
       const data = await res.json();
       setThreadId(data.thread_id);
+      if (data.request_id) {
+        setRequestId(data.request_id);
+        setActiveAuditId(data.request_id);
+      }
 
       if (data.status === "pending_confirmation") {
         setPendingConfirmation(data.pending_confirmation);
@@ -93,6 +100,7 @@ export default function ShoppingAgentDemo() {
 
         if (data.order_result?.id) {
           setOrderId(data.order_result.id);
+          setActiveAuditId(data.order_result.id);
         }
       } else {
         throw new Error(`Unexpected agent status: ${data.status}`);
@@ -113,7 +121,7 @@ export default function ShoppingAgentDemo() {
     setLoading(true);
     setLoadingStep(
       approved
-        ? "Processing purchase & initializing Razorpay order..."
+        ? "Processing purchase & evaluating policy controls..."
         : "Cancelling purchase..."
     );
     setErrorMessage("");
@@ -131,28 +139,63 @@ export default function ShoppingAgentDemo() {
       }
 
       const data = await res.json();
+      const currentReqId = data.request_id || requestId;
+      if (currentReqId) {
+        setRequestId(currentReqId);
+      }
 
       if (!approved || data.status === "rejected") {
         setAgentState("rejected");
+        const auditTarget = currentReqId;
+        if (auditTarget) {
+          setActiveAuditId(auditTarget);
+          fetchAuditEvents(auditTarget);
+          setAuditExpanded(true);
+        }
         return;
       }
 
       const result = data.order_result || {};
       setOrderResult(result);
 
-      if (result.id) {
-        setOrderId(result.id);
+      // 1. Check if policy gate BLOCKED the order
+      if (data.status === "blocked" || result.status === "blocked") {
+        setAgentState("blocked");
+        setErrorMessage(
+          result.reason || data.reason || "Order exceeds configured spending limits or category constraints."
+        );
+        const auditTarget = result.id || currentReqId;
+        if (auditTarget) {
+          setActiveAuditId(auditTarget);
+          fetchAuditEvents(auditTarget);
+          setAuditExpanded(true);
+        }
+        return;
       }
 
-      // Check if order failed (e.g. gateway timeout)
-      if (result.status === "failed" || data.status === "failed") {
+      // 2. Check if order failed (e.g. gateway timeout)
+      if (data.status === "failed" || result.status === "failed") {
         setAgentState("failed");
         setErrorMessage(
           result.detail ||
             "The payment service encountered a temporary timeout. No funds were debited."
         );
-      } else if (data.status === "order_created") {
+        const auditTarget = result.id || currentReqId;
+        if (auditTarget) {
+          setActiveAuditId(auditTarget);
+          fetchAuditEvents(auditTarget);
+          setAuditExpanded(true);
+        }
+        return;
+      }
+
+      // 3. Normal Order Placed
+      if (data.status === "order_created" && result.id) {
+        setOrderId(result.id);
+        setActiveAuditId(result.id);
         setAgentState("order_created");
+        fetchAuditEvents(result.id);
+        setAuditExpanded(true);
       } else {
         setAgentState("completed");
       }
@@ -172,6 +215,10 @@ export default function ShoppingAgentDemo() {
     setCompletedExplanation("");
     setErrorMessage("");
     setThreadId(null);
+    setOrderId(null);
+    setRequestId(null);
+    setActiveAuditId(null);
+    setAuditEvents([]);
     setQuery("");
   }
 
@@ -282,8 +329,8 @@ export default function ShoppingAgentDemo() {
         </section>
       )}
 
-      {/* Order Created State (Green Success) */}
-      {agentState === "order_created" && orderResult && (
+      {/* Order Created State (Green Success — Only when confirmed) */}
+      {agentState === "order_created" && orderResult && orderResult.status === "confirmed" && (
         <section className="state-box state-success">
           <div className="state-title-row">
             <span className="state-icon">✅</span>
@@ -321,6 +368,50 @@ export default function ShoppingAgentDemo() {
           <div>
             <button onClick={handleReset} className="btn-reset">
               ← Search for Another Product
+            </button>
+          </div>
+        </section>
+      )}
+
+      {/* Policy Blocked State (Amber/Red Shield Container) */}
+      {agentState === "blocked" && (
+        <section className="state-box state-warning" style={{ border: "1px solid #f59e0b", background: "linear-gradient(180deg, #2c1404 0%, #150a02 100%)" }}>
+          <div className="state-title-row">
+            <span className="state-icon">🛡️</span>
+            <div>
+              <h2 className="state-title" style={{ color: "#fbbf24" }}>Order Blocked by Policy Gate</h2>
+              <span style={{ fontSize: "0.75rem", color: "#fef08a", fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase" }}>
+                Pre-Order Risk Enforcement
+              </span>
+            </div>
+          </div>
+
+          <div style={{ background: "rgba(0, 0, 0, 0.45)", border: "1px solid rgba(245, 158, 11, 0.4)", borderRadius: "12px", padding: "1.15rem" }}>
+            <div style={{ fontSize: "0.75rem", textTransform: "uppercase", color: "#fde68a", fontWeight: 700, marginBottom: "0.35rem" }}>
+              Policy Violation Reason
+            </div>
+            <p style={{ fontSize: "1.05rem", color: "#fff", fontWeight: 600, lineHeight: 1.4 }}>
+              {errorMessage || orderResult?.reason || "Order total exceeds configured spending limits."}
+            </p>
+          </div>
+
+          <p style={{ fontSize: "0.9rem", color: "#cbd5e1", lineHeight: 1.5 }}>
+            The autonomous shopping agent halted the transaction before submitting it to the payment gateway. No funds were debited and no order was created.
+          </p>
+
+          <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
+            <button onClick={handleReset} className="btn-reset" style={{ borderColor: "#f59e0b", color: "#fef3c7" }}>
+              ← Search for Another Product
+            </button>
+            <button
+              onClick={() => {
+                setAuditExpanded(true);
+                if (activeAuditId) fetchAuditEvents(activeAuditId);
+              }}
+              className="btn-reset"
+              style={{ borderColor: "#6366f1", color: "#c7d2fe" }}
+            >
+              🛡️ View Policy Decision in Audit Trail
             </button>
           </div>
         </section>
@@ -400,11 +491,15 @@ export default function ShoppingAgentDemo() {
             {auditEvents.length > 0 && (
               <span className="audit-count">{auditEvents.length} events</span>
             )}
-            {orderId && (
+            {orderId ? (
               <span style={{ fontSize: "0.8rem", color: "#818cf8" }}>
                 (Order #{orderId})
               </span>
-            )}
+            ) : requestId ? (
+              <span style={{ fontSize: "0.8rem", color: "#f59e0b" }}>
+                (Risk & Policy Trail)
+              </span>
+            ) : null}
           </div>
           <button className="audit-toggle-btn" type="button">
             {auditLoading ? "Refreshing..." : auditExpanded ? "▲ Collapse" : "▼ Expand"}
@@ -413,10 +508,10 @@ export default function ShoppingAgentDemo() {
 
         {auditExpanded && (
           <div className="audit-body">
-            {orderId && (
+            {activeAuditId && (
               <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "1rem" }}>
                 <button
-                  onClick={() => fetchAuditEvents(orderId)}
+                  onClick={() => fetchAuditEvents(activeAuditId)}
                   className="btn-reset"
                   style={{ marginTop: 0, padding: "0.35rem 0.75rem", fontSize: "0.75rem" }}
                   disabled={auditLoading}
@@ -428,9 +523,9 @@ export default function ShoppingAgentDemo() {
 
             {auditEvents.length === 0 ? (
               <div className="audit-empty">
-                {orderId
-                  ? "Loading audit trail for this order..."
-                  : "Audit trail records will automatically appear here once an order ID is established."}
+                {activeAuditId
+                  ? "Loading audit trail for this transaction..."
+                  : "Audit trail records will automatically appear here once agent actions begin."}
               </div>
             ) : (
               <div className="timeline">
@@ -444,19 +539,48 @@ export default function ShoppingAgentDemo() {
                       })
                     : "";
 
+                  const isBlockedPolicy =
+                    item.event_type === "policy_checked" &&
+                    (item.payload?.decision === "BLOCK" || item.reason);
+
                   return (
                     <div key={item.id || index} className="timeline-item">
-                      <div className="timeline-dot" />
+                      <div
+                        className="timeline-dot"
+                        style={
+                          isBlockedPolicy
+                            ? { background: "#ef4444", boxShadow: "0 0 8px #ef4444" }
+                            : undefined
+                        }
+                      />
                       <div className="timeline-content">
                         <div className="timeline-meta">
-                          <span className="timeline-event-badge">{item.event_type}</span>
+                          <span
+                            className="timeline-event-badge"
+                            style={
+                              isBlockedPolicy
+                                ? { background: "rgba(239, 68, 68, 0.2)", color: "#fca5a5", border: "1px solid rgba(239, 68, 68, 0.4)" }
+                                : undefined
+                            }
+                          >
+                            {item.event_type}
+                          </span>
                           <span className="timeline-time">{timeFormatted}</span>
                         </div>
                         <div className="timeline-actor">
                           Actor: <span>{item.actor}</span>
                         </div>
                         {item.reason && (
-                          <div className="timeline-reason">{item.reason}</div>
+                          <div
+                            className="timeline-reason"
+                            style={
+                              isBlockedPolicy
+                                ? { background: "rgba(239, 68, 68, 0.2)", color: "#fca5a5", fontWeight: 600 }
+                                : undefined
+                            }
+                          >
+                            {isBlockedPolicy ? "⛔ Blocked: " : ""}{item.reason}
+                          </div>
                         )}
                       </div>
                     </div>

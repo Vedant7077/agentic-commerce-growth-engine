@@ -133,17 +133,26 @@ def agent_confirm(request, thread_id):
     # Read the final state
     final_snapshot = graph.get_state(config)
     final_state = final_snapshot.values
-
     order_result = final_state.get("order_result", {})
+    request_id = final_state.get("request_id")
 
     if bool(approved):
+        status_val = "order_created"
+        if order_result.get("status") == "blocked":
+            status_val = "blocked"
+        elif order_result.get("status") == "failed":
+            status_val = "failed"
+
         return Response({
-            "status": "order_created",
+            "status": status_val,
             "thread_id": thread_id,
+            "request_id": request_id,
+            "reason": order_result.get("reason") or order_result.get("detail"),
             "order_result": order_result,
         })
     else:
         return Response({
             "status": "rejected",
             "thread_id": thread_id,
+            "request_id": request_id,
         })

@@ -6,8 +6,14 @@ from .serializers import AuditEventSerializer
 
 
 @api_view(["GET"])
-def audit_events_for_order(request, order_id):
-    """GET /audit/<int:order_id>/ — all events for a given order."""
-    events = AuditEvent.objects.filter(order_id=order_id).order_by("created_at")
+def audit_events_for_order(request, identifier):
+    """GET /audit/<identifier>/ — all events for a given order_id or request_id."""
+    events = AuditEvent.objects.none()
+    if str(identifier).isdigit():
+        events = AuditEvent.objects.filter(order_id=int(identifier)).order_by("created_at")
+
+    if not events.exists():
+        events = AuditEvent.objects.filter(payload__request_id=str(identifier)).order_by("created_at")
+
     serializer = AuditEventSerializer(events, many=True)
     return Response(serializer.data)

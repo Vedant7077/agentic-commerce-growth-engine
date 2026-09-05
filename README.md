@@ -1,195 +1,205 @@
-# Agentic Commerce Growth Engine
+# 🛍️ Agentic Commerce Growth Engine
 
-An AI-powered e-commerce platform where a LangGraph agent autonomously handles the full shopping workflow — understanding natural-language product queries, searching and scoring a catalogue, explaining its recommendation, obtaining explicit human approval, enforcing deterministic spending policies, processing Razorpay payments, and generating data-driven growth insights — all with a complete audit trail and automated failure alerting via n8n.
+> **Autonomous AI Shopping with Deterministic Guardrails & Merchant Growth Intelligence**  
+> Built for the **Razorpay Buildathon**
+
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-Vercel-000000?style=for-the-badge&logo=vercel&logoColor=white)](https://agentic-commerce-growth-engine.vercel.app/)
+[![Backend API](https://img.shields.io/badge/Backend%20API-Render-46E3B7?style=for-the-badge&logo=render&logoColor=white)](https://agentic-commerce-growth-engine.onrender.com)
+[![n8n Automation](https://img.shields.io/badge/n8n%20Workflows-Railway-EA4B71?style=for-the-badge&logo=railway&logoColor=white)](https://n8n-production-b6ce.up.railway.app)
+[![Tech Stack](https://img.shields.io/badge/LangGraph-Gemini%20Flash-4285F4?style=for-the-badge&logo=google&logoColor=white)](https://aistudio.google.com/)
+[![Payments](https://img.shields.io/badge/Payments-Razorpay-0C2340?style=for-the-badge&logo=razorpay&logoColor=white)](https://razorpay.com/)
 
 ---
 
-## Architecture
+## 🌐 Live Deployments
 
+| Service | Platform | Live URL | Purpose |
+|---|---|---|---|
+| **Frontend Web App** | Vercel | [agentic-commerce-growth-engine.vercel.app](https://agentic-commerce-growth-engine.vercel.app/) | Interactive Chat UI, Live Policy Controls, Inline Audit Log & Growth Dashboard |
+| **Backend REST API** | Render | [agentic-commerce-growth-engine.onrender.com](https://agentic-commerce-growth-engine.onrender.com) | Django 6 + LangGraph Agent Pipeline, Policy Engine, Razorpay Integration |
+| **Workflow Engine** | Railway | [n8n-production-b6ce.up.railway.app](https://n8n-production-b6ce.up.railway.app) | Incident Alerts (Slack/Email on failure) & Scheduled Merchant Growth Analytics |
+
+---
+
+## 🎯 The Problem & Our Solution
+
+### 🛑 The Problem (0:00–0:30)
+> **E-commerce is drowning in choice.**  
+> A shopper wants a mechanical keyboard — they don't want to compare fifteen listings, read forty reviews, and second-guess a spec sheet.  
+> 
+> But if you hand an AI agent a shopping cart and a payment method, you've created a new problem: **how do you stop it from buying the wrong thing, overspending, or acting without permission?**  
+> Most "AI shopping agent" demos skip that part entirely. **We didn't.**
+
+### 💡 The Solution (0:30–1:00)
+> We built an **Agentic Commerce Growth Engine**:
+> 1. **Natural Language Discovery:** A buyer describes what they want in plain language.
+> 2. **Deterministic Candidate Scoring:** An AI agent searches the catalogue and scores every candidate with a deterministic algorithm — *not a hallucinated LLM guess* — and explains exactly why it picked what it picked.
+> 3. **Mandatory Human-in-the-Loop:** Nothing happens with money until a human explicitly clicks **Approve**.
+> 4. **Zero-LLM Policy Engine:** Even after human approval, the transaction must pass through a strict rule-based policy engine (spending limits, category restrictions) that can still block the checkout.
+> 5. **Full Audit Trail & Alerting:** Every single decision gets recorded to an immutable audit trail. Any failure or policy block immediately triggers an n8n webhook alert.
+> 6. **Autonomous Merchant Growth:** On the merchant side, a second agent analyzes real order history to surface high-converting product bundles and inventory opportunities.
+
+---
+
+## 🏛️ System Architecture
+
+![Agentic Commerce Architecture](docs/images/architecture.png)
+
+### Architectural Flow
+
+```mermaid
+flowchart TD
+    subgraph Buyer_Experience ["🛒 Autonomous Buyer Flow"]
+        UI["Chat UI (Next.js)"]
+        Agent["AI Buyer Agent (LangGraph + Gemini)"]
+        Tools["Tools (Search, Compare, Score, Create Order)"]
+        Auth["User Authorization (Human-in-the-loop Checkpoint)"]
+        Policy["Policy Engine (Deterministic Limits, Category Rules)"]
+        OrderSvc["Order Service (Only Path Allowed to Spend Money)"]
+        Razorpay["Razorpay (Test Mode Checkout)"]
+
+        UI -->|Natural Language Prompt| Agent
+        Agent --> Tools
+        Tools -->|Scored Candidates & Explanation| Auth
+        Auth -->|User Confirms| Policy
+        Policy -->|Passes Limit Checks| OrderSvc
+        OrderSvc --> Razorpay
+    end
+
+    subgraph Observability_Growth ["📊 Observability & Merchant Intelligence"]
+        AuditSvc["Audit Service (Records Every State Transition)"]
+        DB[(PostgreSQL)]
+        N8N["n8n Webhook Engine"]
+        Alerts["Alerts (Slack / Email Incident Notification)"]
+        GrowthAgent["Growth Agent (Daily Cron Trigger)"]
+        Insights["Actionable Merchant Insights"]
+
+        OrderSvc -.-> AuditSvc
+        Policy -.-> AuditSvc
+        AuditSvc --> DB
+        AuditSvc -->|On Failure / Policy Block| N8N
+        N8N --> Alerts
+        GrowthAgent -->|Analyzes Co-occurrence & Cold Products| DB
+        GrowthAgent --> Insights
+    end
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           Next.js Frontend (:3000)                         │
-│  Chat UI · Policy Controls · Audit Trail · Growth Dashboard                │
-└────────────────────────────────┬────────────────────────────────────────────┘
-                                 │  REST (JSON)
-┌────────────────────────────────▼────────────────────────────────────────────┐
-│                        Django + DRF Backend (:8000)                         │
-│                                                                             │
-│  ┌──────────────────────────────────────────────────────────────────────┐   │
-│  │                     LangGraph Agent Pipeline                        │   │
-│  │                                                                     │   │
-│  │  extract_requirements ──► search_catalogue ──► score_and_rank       │   │
-│  │          │                                          │                │   │
-│  │          ▼                                          ▼                │   │
-│  │  explain_selection ──► request_confirmation ──► process_confirmation │   │
-│  │                           (interrupt)               │                │   │
-│  │                        Human approves               │                │   │
-│  │                                                     ▼                │   │
-│  │                                              Policy Engine           │   │
-│  │                                           (ALLOW / BLOCK /           │   │
-│  │                                            NEEDS_APPROVAL)           │   │
-│  │                                                     │                │   │
-│  │                                                     ▼                │   │
-│  │                                            Razorpay Checkout         │   │
-│  │                                          (+ timeout recovery)        │   │
-│  └──────────────────────────────────────────────────────────────────────┘   │
-│                                                                             │
-│  ┌─────────────┐  ┌─────────────────┐  ┌──────────────────────────────┐    │
-│  │  Catalogue   │  │  Audit Service  │  │  Growth Analytics (SQL +    │    │
-│  │  (Products)  │  │  (every event)  │  │  Gemini insights)           │    │
-│  └─────────────┘  └────────┬────────┘  └──────────────────────────────┘    │
-│                             │                                               │
-└─────────────────────────────┼───────────────────────────────────────────────┘
-                              │ webhook (failure/block events)
-                    ┌─────────▼──────────┐
-                    │   n8n (:5678)       │
-                    │  Failure Alerts     │
-                    └────────────────────┘
-                              │
-                    ┌─────────▼──────────┐
-                    │  PostgreSQL (:5433) │
-                    │  • Django models    │
-                    │  • LangGraph state  │
-                    └────────────────────┘
-```
 
-### Key Components
+> **Unified Data Architecture:** All three systems (Agent, Audit, and Growth) read from and write to the same PostgreSQL database — **no separate data stores, just clean separation of concerns.**
 
-| Layer | Tech | Role |
+---
+
+## ⚡ Try It Live (Interactive Walkthrough)
+
+Open the [Live Demo](https://agentic-commerce-growth-engine.vercel.app/) and test the full pipeline in under 60 seconds:
+
+### 1. Natural Language Shopping
+Type a query or tap a quick prompt:
+* *"Find me a compact mechanical keyboard for software development under ₹8,000."*
+* *"I need an ergonomic vertical mouse for long coding sessions."*
+
+### 2. Transparent Scoring & Explanation
+The agent runs a composite scoring formula:
+$$\text{Score} = (\text{Price Fit} \times 0.40) + (\text{Customer Rating} \times 0.35) + (\text{Feature Overlap} \times 0.25)$$
+You see **why** the product was recommended before any order is created.
+
+### 3. Human-in-the-Loop Checkpoint
+The LangGraph pipeline pauses execution at `request_confirmation`. The buyer must click **Approve Purchase** to resume state.
+
+### 4. Test the Guardrails (Policy Engine)
+* Use the **Spending Limit** slider on the UI to lower your budget (e.g., set to ₹2,000).
+* Request a premium keyboard (₹7,999) and approve it.
+* **Result:** The policy engine intercepts and **BLOCKS** the purchase before Razorpay is called. 
+* The incident is immediately dispatched to n8n for failure alerting!
+
+### 5. Merchant Growth Analytics
+* Switch to the **Growth Engine** tab.
+* The system computes frequent product co-occurrence (e.g., *CodeBoard 75% + PrecisionGlide Mouse* basket affinity) and surfaces low-velocity inventory with Gemini-generated merchandising strategies.
+
+---
+
+## 🔑 Key Engineering Innovations
+
+| Feature | How We Built It | Why It Matters |
 |---|---|---|
-| **Agent** | LangGraph + Gemini | 6-node pipeline with human-in-the-loop interrupt/resume, PostgresSaver checkpointer |
-| **Scoring** | Deterministic Python | Weighted composite score (price fit × rating × feature overlap) — zero LLM in scoring |
-| **Policy Engine** | Deterministic Python | Rule-based spending limits, category blocks, approval thresholds — zero LLM |
-| **Payments** | Razorpay Python SDK | Order creation, timeout detection, idempotent retry/recovery |
-| **Audit** | Django ORM + n8n | Every agent action recorded; failure/block events trigger n8n webhooks |
-| **Growth** | Raw SQL + Gemini | Frequently-bought-together pairs, underperforming categories → LLM-generated insights |
-| **Frontend** | Next.js | Single-page chat UI with live policy controls and inline audit trail |
+| **Zero-LLM Scoring** | Deterministic Python algorithm factoring budget alignment, star rating, and exact keyword matches. | Prevents LLM bias, hallucinations, and non-reproducible recommendations. |
+| **Stateful LangGraph Checkpointing** | Persisted LangGraph thread states via `PostgresSaver`. | Allows execution to safely suspend waiting for human approval, surviving server restarts. |
+| **Deterministic Policy Firewall** | Hardcoded logic checking user spending limits and category whitelists/blacklists. | LLMs can be prompt-injected; a deterministic policy engine cannot. |
+| **Idempotent Razorpay Recovery** | UUID-based idempotency keys and state reconciliation for timeout recovery. | Network drops during checkout never result in double-charging or orphaned orders. |
+| **Automated Incident Escalation** | Audit service triggers an async n8n webhook whenever an order fails or gets blocked. | Immediate operational visibility across Slack, email, or webhook receivers. |
 
 ---
 
-## Running Locally
+## 💻 Local Development Setup
+
+If you wish to run the entire stack locally with Docker Compose:
 
 ### Prerequisites
+* [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Docker & Compose)
+* [Google Gemini API Key](https://aistudio.google.com/apikey)
+* [Razorpay Test Account Key & Secret](https://dashboard.razorpay.com/app/keys)
 
-- Docker & Docker Compose
-- A [Razorpay test account](https://dashboard.razorpay.com/app/keys) (free)
-- A [Google Gemini API key](https://aistudio.google.com/apikey)
-
-### Steps
-
+### 1. Clone & Configure
 ```bash
-# 1. Clone the repo
 git clone https://github.com/Vedant7077/agentic-commerce-growth-engine.git
 cd agentic-commerce-growth-engine
 
-# 2. Create your env file
 cp .env.example .env
-# → Fill in RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, GEMINI_API_KEY, and POSTGRES_PASSWORD
-
-# 3. Start all services
-docker compose up --build
-
-# 4. (First run) Seed the product catalogue and demo orders
-docker compose exec backend python manage.py seed_products
-docker compose exec backend python manage.py seed_demo_orders
-
-# 5. Start the frontend (separate terminal)
-cd frontend
-npm install
-npm run dev
+# Edit .env with your GEMINI_API_KEY, RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET
 ```
 
-| Service | URL |
-|---|---|
-| Frontend | http://localhost:3000 |
-| Backend API | http://localhost:8000 |
-| n8n Dashboard | http://localhost:5678 (admin / changeme123) |
-
----
-
-## Running the Demo
-
-1. **Open** http://localhost:3000
-2. **Type a query** like _"Find me a mechanical keyboard under ₹3,000"_ or click one of the sample queries.
-3. **Watch the agent pipeline** — it extracts requirements, searches the catalogue, scores/ranks products, and generates an explanation.
-4. **Approve or reject** the recommendation when the agent asks for confirmation.
-5. **Observe the policy engine** — try adjusting the spending limit slider in the UI to see orders get blocked when the price exceeds the policy threshold.
-6. **Check the audit trail** — expand the audit section to see every event the agent recorded.
-7. **Trigger a failure** — set `FORCE_TIMEOUT=true` in `.env` and restart the backend to see timeout recovery + n8n alerting in action.
-8. **View growth insights** — hit the growth tab to see frequently-bought-together analysis and Gemini-generated recommendations.
-
-### Timeout / Recovery Demo
-
+### 2. Launch with Docker Compose
 ```bash
-# Simulate a Razorpay timeout
-docker compose exec backend bash -c "export FORCE_TIMEOUT=true && python manage.py shell"
-# Or set FORCE_TIMEOUT=true in .env and docker compose up again
+docker compose up --build -d
 ```
 
-The agent will detect the timeout, attempt idempotent recovery, and record the full retry sequence in the audit trail. n8n receives a webhook alert.
+### 3. Bootstrap & Seed Database
+```bash
+# Seed product catalogue, demo order patterns, and policy rules
+docker compose exec backend python manage.py seed_all_if_empty
+```
+
+### 4. Access Local Services
+* **Frontend**: [http://localhost:3000](http://localhost:3000)
+* **Backend API**: [http://localhost:8000](http://localhost:8000)
+* **n8n Automation**: [http://localhost:5678](http://localhost:5678) (`admin` / `changeme123`)
 
 ---
 
-## What We Deliberately Did NOT Build (and Why)
+## 🛠️ API Reference
 
-In the interest of shipping a focused, production-quality demonstration rather than a sprawling prototype, we explicitly scoped out the following:
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/agent/start/` | Initiates natural-language search; returns scored product and thread ID |
+| `POST` | `/agent/<thread_id>/confirm/` | Submits human approval (`approve: true/false`); triggers policy check & Razorpay |
+| `GET` | `/products/` | Lists catalogue products with categories, prices, and stock |
+| `GET` | `/accounts/limit/` | Retrieves current user spending limit |
+| `POST` | `/accounts/limit/` | Updates buyer spending limit |
+| `GET` | `/audit/events/` | Fetches audit log events across all pipeline nodes |
+| `GET` | `/growth/analyze/` | Runs SQL basket affinity analysis & Gemini insight synthesis |
 
-| Excluded | Rationale |
+---
+
+## ⚖️ Deliberate Engineering Scoping
+
+In the interest of delivering a focused, production-grade architectural proof-of-concept, we made deliberate decisions on what **not** to build:
+
+| Excluded Feature | Engineering Rationale |
 |---|---|
-| **Multi-user authentication / sessions** | The demo runs as a single user (user_id=1). Auth adds OAuth/JWT complexity without demonstrating the core agent → policy → payment pipeline. |
-| **Real payment capture** | We create Razorpay orders in TEST mode only. Actual money movement is a Razorpay dashboard toggle, not a code change — proving it in test mode is sufficient. |
-| **Multi-product cart checkout** | The agent recommends and checks out a single top product. Multi-item carts are an additive feature that don't change the underlying architecture. |
-| **Admin dashboard for policy rules** | Policy rules are managed via Django Admin and seed scripts. A custom admin UI is polish, not architecture. |
-| **Webhook-driven payment status updates** | We verify payment status synchronously. Webhook listeners are important for production but are a Razorpay infra concern, not an agent-architecture concern. |
-| **Horizontal scaling / Celery workers** | The agent pipeline runs synchronously in the request cycle. For a buildathon demo, this is fine; in production you'd move the LangGraph execution to Celery. |
-| **Internationalization / multi-currency** | All prices are in INR (paise). Multi-currency is a Razorpay config, not an architectural decision. |
-| **Vector search / embeddings for catalogue** | We use deterministic keyword + feature matching. Vector search is a valid enhancement but would obscure the scoring pipeline's transparency. |
-
-These are all **additive** features that layer on top of the architecture we built. Nothing in our design prevents adding them — we just chose to ship depth over breadth.
+| **Multi-User Auth / OAuth** | Demo runs as an active buyer (`user_id=1`). Adding auth boilerplate would add complexity without demonstrating the core agent → policy → payment pipeline. |
+| **Live Payment Capture** | Razorpay is operated in **TEST mode**. Live money movement is a Razorpay dashboard switch, not an architectural code difference. |
+| **Multi-Item Cart Checkout** | The agent focuses on single-item high-confidence recommendations. Multi-item cart expansion is purely additive. |
+| **Vector Search / Embeddings** | Deterministic keyword and attribute matching was prioritized to keep candidate scoring completely transparent and explainable. |
+| **Asynchronous Celery Queues** | LangGraph executes synchronously within the request cycle for predictable demo response times. In heavy-traffic production, this cleanly delegates to background workers. |
 
 ---
 
-## Tech Stack
+## 🏆 Buildathon Summary
 
-| | |
-|---|---|
-| **Backend** | Python 3.11, Django 6.1, Django REST Framework |
-| **Agent** | LangGraph, LangChain, Google Gemini |
-| **Payments** | Razorpay Python SDK (TEST mode) |
-| **Database** | PostgreSQL 16 |
-| **Alerting** | n8n (self-hosted) |
-| **Frontend** | Next.js (React) |
-| **Infra** | Docker Compose, Gunicorn, multi-stage Docker build |
+* **Frontend:** Next.js (Tailwind CSS, React Markdown, Lucide Icons) hosted on **Vercel**
+* **Backend:** Python 3.11, Django 6.1, Django REST Framework, LangGraph, LangChain hosted on **Render**
+* **Database:** Managed PostgreSQL
+* **Workflow Automation:** n8n deployed on **Railway**
+* **AI Provider:** Google Gemini Flash
+* **Payment Gateway:** Razorpay SDK (Test Mode)
 
----
-
-## Project Structure
-
-```
-├── backend/
-│   ├── agent/           # LangGraph pipeline, tools, scoring
-│   ├── audit/           # Audit event model, service, n8n webhook
-│   ├── accounts/        # User model, spending limit API
-│   ├── catalogue/       # Product model, seed command
-│   ├── config/          # Django settings, URLs, WSGI
-│   ├── growth/          # SQL analytics + Gemini insight generation
-│   ├── orders/          # Order/OrderItem models, views
-│   ├── payments/        # Razorpay integration, timeout recovery
-│   ├── policy/          # Deterministic policy engine
-│   ├── Dockerfile       # Multi-stage production build
-│   └── entrypoint.sh    # Migrate → collectstatic → gunicorn
-├── frontend/
-│   └── app/             # Next.js single-page chat UI
-├── n8n_workflows/       # Failure alert workflow (importable JSON)
-├── scripts/             # Razorpay test scripts
-├── docs/                # Integration notes, demo logs
-├── docker-compose.yml
-├── schema.sql           # Full PostgreSQL schema reference
-└── .env.example
-```
-
----
-
-## License
-
-Built for the Razorpay Buildathon.
+Crafted with ❤️ for the **Razorpay Buildathon**.

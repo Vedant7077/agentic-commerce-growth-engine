@@ -17,6 +17,7 @@ Patterns deliberately seeded for hackathon demo & growth engine analytics:
 import random
 import uuid
 from datetime import timedelta
+from typing import Any
 
 from django.core.management.base import BaseCommand
 from django.db import transaction
@@ -53,6 +54,7 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        style: Any = self.style
         total_target = options["count"]
         clear_existing = options["clear"]
 
@@ -60,7 +62,7 @@ class Command(BaseCommand):
             deleted_orders, _ = Order.objects.filter(idempotency_key__startswith="demo_").delete()
             deleted_users, _ = User.objects.filter(email__endswith="@demo.com").delete()
             self.stdout.write(
-                self.style.WARNING(
+                style.WARNING(
                     f"Cleared {deleted_orders} previous demo orders and {deleted_users} demo users."
                 )
             )
@@ -132,7 +134,7 @@ class Command(BaseCommand):
 
         self.stdout.write(f"Generating {total_target} synthetic historical orders...")
 
-        with transaction.atomic():
+        with transaction.atomic():  # type: ignore
             for i in range(total_target):
                 # Pick customer
                 user = random.choice(users)
@@ -238,7 +240,7 @@ class Command(BaseCommand):
                 created_orders.append(order)
 
         # 4. Output Summary
-        self.stdout.write(self.style.SUCCESS(f"\nSuccessfully seeded {len(created_orders)} demo orders!\n"))
+        self.stdout.write(style.SUCCESS(f"\nSuccessfully seeded {len(created_orders)} demo orders!\n"))
         self.stdout.write("Pattern Verification:")
         self.stdout.write(
             f"  - Co-occurrence: 'CodeBoard 75%' + 'PrecisionGlide Mouse' bought together: {co_occurrence_count} times ({co_occurrence_count / total_target * 100:.1f}%)"
@@ -256,6 +258,7 @@ class Command(BaseCommand):
         self.stdout.write("  - Date span: Past 45 days to today\n")
 
     def _get_or_create_product(self, search_query, fallback_name, category, price_paise, rating, description):
+        style: Any = self.style
         prod = Product.objects.filter(name__icontains=search_query).first()
         if prod:
             return prod
@@ -267,5 +270,5 @@ class Command(BaseCommand):
             stock=50,
             description=description,
         )
-        self.stdout.write(self.style.NOTICE(f"Created missing product: {fallback_name} (₹{price_paise / 100:.2f})"))
+        self.stdout.write(style.NOTICE(f"Created missing product: {fallback_name} (₹{price_paise / 100:.2f})"))
         return prod

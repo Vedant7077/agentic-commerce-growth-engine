@@ -18,4 +18,4 @@ class GrowthInsight(models.Model):
         ordering = ["-created_at"]
 
     def __str__(self) -> str:
-        return f"[{self.insight_type}] {self.description[:80]}"
+        return f"[{self.insight_type}] {str(self.description)[:80]}"

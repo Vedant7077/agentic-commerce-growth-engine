@@ -23,14 +23,14 @@
 
 ## 🎯 The Problem & Our Solution
 
-### 🛑 The Problem (0:00–0:30)
+### 🛑 The Problem 
 > **E-commerce is drowning in choice.**  
 > A shopper wants a mechanical keyboard — they don't want to compare fifteen listings, read forty reviews, and second-guess a spec sheet.  
 > 
 > But if you hand an AI agent a shopping cart and a payment method, you've created a new problem: **how do you stop it from buying the wrong thing, overspending, or acting without permission?**  
 > Most "AI shopping agent" demos skip that part entirely. **We didn't.**
 
-### 💡 The Solution (0:30–1:00)
+### 💡 The Solution 
 > We built an **Agentic Commerce Growth Engine**:
 > 1. **Natural Language Discovery:** A buyer describes what they want in plain language.
 > 2. **Deterministic Candidate Scoring:** An AI agent searches the catalogue and scores every candidate with a deterministic algorithm — *not a hallucinated LLM guess* — and explains exactly why it picked what it picked.

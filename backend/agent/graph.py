@@ -568,31 +568,46 @@ def process_confirmation(state: State) -> dict:
 
 
 def _build_checkpointer():
-    """Build a PostgresSaver from Django's DATABASES settings.
+    """Build a PostgresSaver from DATABASE_URL or POSTGRES_* env vars.
 
-    Uses psycopg (v3) connection pool with autocommit and dict_row as
-    required by langgraph-checkpoint-postgres.
+    Prefers DATABASE_URL (provided by Render and used by Django via
+    dj_database_url).  Falls back to constructing a connection string
+    from individual POSTGRES_* variables so local docker-compose still
+    works unchanged.
+
+    Adds a 5-second connection timeout so broken connections fail fast
+    instead of hanging the gunicorn worker indefinitely.
     """
     from psycopg import Connection
     from psycopg_pool import ConnectionPool
     from psycopg.rows import dict_row
     from langgraph.checkpoint.postgres import PostgresSaver
 
-    db = {
-        "dbname": os.environ.get("POSTGRES_DB", "agentic_commerce"),
-        "user": os.environ.get("POSTGRES_USER", "postgres"),
-        "password": os.environ.get("POSTGRES_PASSWORD", "postgres"),
-        "host": os.environ.get("POSTGRES_HOST", "localhost"),
-        "port": os.environ.get("POSTGRES_PORT", "5432"),
-    }
-    conninfo = (
-        f"postgresql://{db['user']}:{db['password']}"
-        f"@{db['host']}:{db['port']}/{db['dbname']}"
-    )
+    database_url = os.environ.get("DATABASE_URL")
+
+    if database_url:
+        conninfo = database_url
+    else:
+        db = {
+            "dbname": os.environ.get("POSTGRES_DB", "agentic_commerce"),
+            "user": os.environ.get("POSTGRES_USER", "postgres"),
+            "password": os.environ.get("POSTGRES_PASSWORD", "postgres"),
+            "host": os.environ.get("POSTGRES_HOST", "localhost"),
+            "port": os.environ.get("POSTGRES_PORT", "5432"),
+        }
+        conninfo = (
+            f"postgresql://{db['user']}:{db['password']}"
+            f"@{db['host']}:{db['port']}/{db['dbname']}"
+        )
 
     pool: ConnectionPool[Connection[dict[str, Any]]] = ConnectionPool(
         conninfo=conninfo,
-        kwargs={"autocommit": True, "row_factory": dict_row},
+        kwargs={
+            "autocommit": True,
+            "row_factory": dict_row,
+            "connect_timeout": 5,
+        },
+        timeout=5,          # max seconds to wait for a pool connection
     )
 
     checkpointer = PostgresSaver(pool)

@@ -13,3 +13,4 @@ langgraph-checkpoint-postgres
 razorpay
 requests
 gunicorn
+dj-database-url

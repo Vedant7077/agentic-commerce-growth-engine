@@ -12,3 +12,4 @@ httpx
 langgraph-checkpoint-postgres
 razorpay
 requests
+gunicorn

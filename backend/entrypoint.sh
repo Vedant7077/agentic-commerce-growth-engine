@@ -4,6 +4,9 @@ set -e
 echo "Applying database migrations..."
 python manage.py migrate
 
+echo "Seeding database (skipped if data already exists)..."
+python manage.py seed_all_if_empty
+
 echo "Collecting static files..."
 python manage.py collectstatic --noinput
 

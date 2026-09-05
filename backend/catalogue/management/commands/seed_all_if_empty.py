@@ -9,6 +9,8 @@ Usage:
     python manage.py seed_all_if_empty
 """
 
+from typing import Any
+
 from django.core.management import call_command
 from django.core.management.base import BaseCommand
 
@@ -23,9 +25,10 @@ class Command(BaseCommand):
     )
 
     def handle(self, *args, **options):
+        style: Any = self.style
         if Product.objects.count() > 0:
             self.stdout.write(
-                self.style.NOTICE(
+                style.WARNING(
                     "Products already exist — skipping all seeding."
                 )
             )
@@ -54,5 +57,5 @@ class Command(BaseCommand):
         self.stdout.write(f"    {verb}: {user}")
 
         self.stdout.write(
-            self.style.SUCCESS("All seeding completed successfully!")
+            style.SUCCESS("All seeding completed successfully!")
         )

@@ -10,6 +10,47 @@ const SAMPLE_QUERIES = [
   "Looking for noise cancelling gaming headphones",
 ];
 
+// Helper to normalize spending limit from various backend API response shapes
+function extractSpendingLimitInr(data) {
+  if (data === null || data === undefined) return null;
+  const raw = (typeof data === "object" && data.data && typeof data.data === "object")
+    ? data.data
+    : data;
+
+  if (raw.spending_limit_inr !== undefined && raw.spending_limit_inr !== null) {
+    const val = Number(raw.spending_limit_inr);
+    if (!isNaN(val)) return val;
+  }
+  if (raw.limit_inr !== undefined && raw.limit_inr !== null) {
+    const val = Number(raw.limit_inr);
+    if (!isNaN(val)) return val;
+  }
+  if (raw.spending_limit_paise !== undefined && raw.spending_limit_paise !== null) {
+    const val = Number(raw.spending_limit_paise);
+    if (!isNaN(val)) return val / 100;
+  }
+  if (raw.limit_paise !== undefined && raw.limit_paise !== null) {
+    const val = Number(raw.limit_paise);
+    if (!isNaN(val)) return val / 100;
+  }
+  if (raw.limit !== undefined && raw.limit !== null) {
+    const val = Number(raw.limit);
+    if (!isNaN(val)) {
+      return val > 100000 ? val / 100 : val;
+    }
+  }
+  if (raw.spending_limit !== undefined && raw.spending_limit !== null) {
+    const val = Number(raw.spending_limit);
+    if (!isNaN(val)) {
+      return val > 100000 ? val / 100 : val;
+    }
+  }
+  if (typeof raw === "number") {
+    return raw > 100000 ? raw / 100 : raw;
+  }
+  return null;
+}
+
 export default function ShoppingAgentDemo() {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
@@ -38,11 +79,15 @@ export default function ShoppingAgentDemo() {
   // Load user's active spending limit from backend
   const loadSpendingLimit = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/accounts/limit/`);
+      let res = await fetch(`${API_BASE}/accounts/limit/`);
+      if (res.status === 404) {
+        res = await fetch(`${API_BASE}/limit/`);
+      }
       if (res.ok) {
         const data = await res.json();
-        if (data.spending_limit_inr !== undefined) {
-          setSpendingLimit(data.spending_limit_inr);
+        const parsedLimit = extractSpendingLimitInr(data);
+        if (parsedLimit !== null && !isNaN(parsedLimit)) {
+          setSpendingLimit(parsedLimit);
         }
       }
     } catch (err) {
@@ -58,14 +103,32 @@ export default function ShoppingAgentDemo() {
     const num = Number(val);
     if (isNaN(num) || num < 0) return;
     try {
-      const res = await fetch(`${API_BASE}/accounts/limit/`, {
+      const payload = {
+        spending_limit_inr: num,
+        spending_limit_paise: Math.round(num * 100),
+        limit: num,
+        limit_paise: Math.round(num * 100),
+      };
+      let res = await fetch(`${API_BASE}/accounts/limit/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ spending_limit_inr: num }),
+        body: JSON.stringify(payload),
       });
+      if (res.status === 404) {
+        res = await fetch(`${API_BASE}/limit/`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      }
       if (res.ok) {
         const data = await res.json();
-        setSpendingLimit(data.spending_limit_inr);
+        const parsedLimit = extractSpendingLimitInr(data);
+        if (parsedLimit !== null && !isNaN(parsedLimit)) {
+          setSpendingLimit(parsedLimit);
+        } else {
+          setSpendingLimit(num);
+        }
         setLimitSaved(true);
         setTimeout(() => setLimitSaved(false), 2000);
       }
@@ -283,52 +346,54 @@ export default function ShoppingAgentDemo() {
       </header>
 
       {/* Interactive Spending Limit Policy Bar */}
-      <div className="policy-bar">
-        <div className="policy-bar-left">
-          <span className="policy-bar-icon">🛡️</span>
-          <div>
-            <div className="policy-bar-title">Active Spending Limit Policy</div>
-            <div className="policy-bar-desc">Pre-order policy gate will automatically block purchases exceeding this amount</div>
-          </div>
-        </div>
-
-        <div className="policy-bar-right">
-          <div className="limit-input-wrap">
-            <span className="currency-prefix">₹</span>
-            <input
-              type="number"
-              className="limit-input"
-              value={spendingLimit}
-              onChange={(e) => setSpendingLimit(e.target.value)}
-              onBlur={() => updateSpendingLimit(spendingLimit)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") updateSpendingLimit(spendingLimit);
-              }}
-              min="100"
-              step="500"
-              title="Click or enter new spending limit and press Enter"
-            />
+      {spendingLimit !== null && spendingLimit !== undefined && (
+        <div className="policy-bar">
+          <div className="policy-bar-left">
+            <span className="policy-bar-icon">🛡️</span>
+            <div>
+              <div className="policy-bar-title">Active Spending Limit Policy</div>
+              <div className="policy-bar-desc">Pre-order policy gate will automatically block purchases exceeding this amount</div>
+            </div>
           </div>
 
-          <div className="preset-chips">
-            {[3000, 5000, 15000, 50000].map((preset) => (
-              <button
-                key={preset}
-                type="button"
-                className={`preset-chip ${Number(spendingLimit) === preset ? "preset-chip-active" : ""}`}
-                onClick={() => {
-                  setSpendingLimit(preset);
-                  updateSpendingLimit(preset);
+          <div className="policy-bar-right">
+            <div className="limit-input-wrap">
+              <span className="currency-prefix">₹</span>
+              <input
+                type="number"
+                className="limit-input"
+                value={spendingLimit}
+                onChange={(e) => setSpendingLimit(e.target.value)}
+                onBlur={() => updateSpendingLimit(spendingLimit)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") updateSpendingLimit(spendingLimit);
                 }}
-              >
-                ₹{preset >= 1000 ? `${preset / 1000}k` : preset}
-              </button>
-            ))}
-          </div>
+                min="100"
+                step="500"
+                title="Click or enter new spending limit and press Enter"
+              />
+            </div>
 
-          {limitSaved && <span className="limit-saved-tag">Saved ✓</span>}
+            <div className="preset-chips">
+              {[3000, 5000, 15000, 50000].map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  className={`preset-chip ${Number(spendingLimit) === preset ? "preset-chip-active" : ""}`}
+                  onClick={() => {
+                    setSpendingLimit(preset);
+                    updateSpendingLimit(preset);
+                  }}
+                >
+                  ₹{preset >= 1000 ? `${preset / 1000}k` : preset}
+                </button>
+              ))}
+            </div>
+
+            {limitSaved && <span className="limit-saved-tag">Saved ✓</span>}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Query Input Section */}
       <section className="card">
@@ -630,47 +695,101 @@ export default function ShoppingAgentDemo() {
                       })
                     : "";
 
-                  const isBlockedPolicy =
-                    item.event_type === "policy_checked" &&
-                    (item.payload?.decision === "BLOCK" || item.reason);
+                  const isPolicyChecked = item.event_type === "policy_checked";
+                  const decision = isPolicyChecked
+                    ? (item.payload?.decision || item.decision || (typeof item.reason === "string" && item.reason.toLowerCase().includes("block") ? "BLOCK" : "ALLOW"))
+                    : null;
+
+                  let dotStyle = undefined;
+                  let badgeStyle = undefined;
+                  let reasonStyle = undefined;
+                  let decisionIcon = null;
+                  let decisionLabel = null;
+
+                  if (isPolicyChecked) {
+                    if (decision === "BLOCK") {
+                      dotStyle = { background: "#ef4444", boxShadow: "0 0 8px #ef4444" };
+                      badgeStyle = { background: "rgba(239, 68, 68, 0.2)", color: "#fca5a5", border: "1px solid rgba(239, 68, 68, 0.4)" };
+                      reasonStyle = { background: "rgba(239, 68, 68, 0.15)", color: "#fca5a5", border: "1px solid rgba(239, 68, 68, 0.3)" };
+                      decisionIcon = "🚫";
+                      decisionLabel = "Blocked";
+                    } else if (decision === "NEEDS_APPROVAL") {
+                      dotStyle = { background: "#f59e0b", boxShadow: "0 0 8px #f59e0b" };
+                      badgeStyle = { background: "rgba(245, 158, 11, 0.2)", color: "#fcd34d", border: "1px solid rgba(245, 158, 11, 0.4)" };
+                      reasonStyle = { background: "rgba(245, 158, 11, 0.15)", color: "#fcd34d", border: "1px solid rgba(245, 158, 11, 0.3)" };
+                      decisionIcon = "⚠️";
+                      decisionLabel = "Needs Approval";
+                    } else if (decision === "ALLOW") {
+                      dotStyle = { background: "#10b981", boxShadow: "0 0 8px #10b981" };
+                      badgeStyle = { background: "rgba(16, 185, 129, 0.2)", color: "#6ee7b7", border: "1px solid rgba(16, 185, 129, 0.4)" };
+                      reasonStyle = { background: "rgba(16, 185, 129, 0.12)", color: "#a7f3d0", border: "1px solid rgba(16, 185, 129, 0.25)" };
+                      decisionIcon = "✅";
+                      decisionLabel = "Passed";
+                    }
+                  } else {
+                    reasonStyle = { background: "rgba(148, 163, 184, 0.1)", color: "#cbd5e1", border: "1px solid rgba(148, 163, 184, 0.2)" };
+                  }
+
+                  const reasonText = item.reason || item.payload?.reason || item.payload?.detail;
 
                   return (
                     <div key={item.id || index} className="timeline-item">
                       <div
                         className="timeline-dot"
-                        style={
-                          isBlockedPolicy
-                            ? { background: "#ef4444", boxShadow: "0 0 8px #ef4444" }
-                            : undefined
-                        }
+                        style={dotStyle}
                       />
                       <div className="timeline-content">
                         <div className="timeline-meta">
-                          <span
-                            className="timeline-event-badge"
-                            style={
-                              isBlockedPolicy
-                                ? { background: "rgba(239, 68, 68, 0.2)", color: "#fca5a5", border: "1px solid rgba(239, 68, 68, 0.4)" }
-                                : undefined
-                            }
-                          >
-                            {item.event_type}
-                          </span>
+                          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+                            <span
+                              className="timeline-event-badge"
+                              style={badgeStyle}
+                            >
+                              {item.event_type}
+                            </span>
+                            {isPolicyChecked && decisionLabel && (
+                              <span
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "0.25rem",
+                                  fontSize: "0.75rem",
+                                  fontWeight: 700,
+                                  padding: "0.15rem 0.5rem",
+                                  borderRadius: "6px",
+                                  ...badgeStyle,
+                                }}
+                              >
+                                <span>{decisionIcon}</span>
+                                <span>{decisionLabel}</span>
+                              </span>
+                            )}
+                          </div>
                           <span className="timeline-time">{timeFormatted}</span>
                         </div>
                         <div className="timeline-actor">
                           Actor: <span>{item.actor}</span>
                         </div>
-                        {item.reason && (
+                        {reasonText && (
                           <div
                             className="timeline-reason"
-                            style={
-                              isBlockedPolicy
-                                ? { background: "rgba(239, 68, 68, 0.2)", color: "#fca5a5", fontWeight: 600 }
-                                : undefined
-                            }
+                            style={{
+                              marginTop: "0.4rem",
+                              padding: "0.35rem 0.6rem",
+                              borderRadius: "6px",
+                              fontSize: "0.8rem",
+                              lineHeight: 1.5,
+                              ...reasonStyle,
+                            }}
                           >
-                            {isBlockedPolicy ? "⛔ Blocked: " : ""}{item.reason}
+                            {isPolicyChecked && decisionLabel ? (
+                              <>
+                                <strong>{decisionIcon} {decisionLabel}: </strong>
+                                <span>{reasonText}</span>
+                              </>
+                            ) : (
+                              reasonText
+                            )}
                           </div>
                         )}
                       </div>
